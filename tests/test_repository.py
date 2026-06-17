@@ -1,3 +1,5 @@
+import json
+import sqlite3
 from decimal import Decimal
 
 from autocrypto.execution import ExitOrder, PaperOrder
@@ -102,3 +104,61 @@ def test_sqlite_repository_persists_and_pops_pending_approval(tmp_path):
     assert popped.symbol == "ETH/USDT"
     assert reopened.pop_pending_approval("needs-review") is None
     assert reopened.list_pending_approvals() == []
+
+
+def test_sqlite_repository_backfills_idempotency_claims_from_existing_orders(tmp_path):
+    db_path = tmp_path / "legacy.sqlite3"
+    signal = normalize_signal(
+        {
+            "signal_id": "already-executed",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "25",
+            "price": "50000",
+            "stop_loss_pct": "2",
+        },
+        source="test",
+    )
+    order = PaperOrder(
+        order_id="paper-already-executed",
+        signal_id=signal.signal_id,
+        mode="paper",
+        exchange="paper",
+        symbol="BTC/USDT",
+        side="buy",
+        notional=Decimal("25"),
+        price=Decimal("50000"),
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE signals (
+                signal_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL
+            );
+
+            CREATE TABLE orders (
+                order_id TEXT PRIMARY KEY,
+                signal_id TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+
+            CREATE TABLE audit_events (
+                event_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO signals (signal_id, payload) VALUES (?, ?)",
+            (signal.signal_id, json.dumps(signal.raw_payload, sort_keys=True)),
+        )
+        conn.execute(
+            "INSERT INTO orders (order_id, signal_id, payload) VALUES (?, ?, ?)",
+            (order.order_id, order.signal_id, json.dumps(order.to_dict(), sort_keys=True)),
+        )
+
+    repo = SQLiteRepository(db_path)
+
+    assert repo.claim_signal(signal) is False

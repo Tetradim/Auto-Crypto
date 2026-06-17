@@ -154,6 +154,9 @@ class SQLiteRepository:
                     payload TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+
+                INSERT OR IGNORE INTO signal_claims (signal_id)
+                SELECT DISTINCT signal_id FROM orders;
                 """
             )
 
