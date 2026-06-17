@@ -11,6 +11,7 @@ Auto-Crypto is a paper-first crypto trading automation service for Discord and w
 - Paper exchange that records accepted orders, planned stop-loss/take-profit exits, and triggered paper exits
 - Minimal Discord slash-command client using `/health` and `/signal_test`
 - Optional CCXT adapter boundary for future live exchange integrations
+- Exchange discovery and capability reporting for paper mode and installed CCXT venues
 - Optional HMAC-signed webhook verification through `AUTO_CRYPTO_WEBHOOK_SECRET`
 - SQLite repository for signal, paper-order, and audit history
 - Operator halt/resume controls that block new orders and record audit events
@@ -32,6 +33,12 @@ python -m uvicorn autocrypto.app:app --reload
 ```
 
 For environment-backed settings, import and run `autocrypto.app:create_app_from_env()` from your ASGI launcher. `AUTO_CRYPTO_DB_PATH` enables SQLite persistence, and `AUTO_CRYPTO_WEBHOOK_SECRET` enables signed webhook enforcement.
+
+Install the optional exchange extras to inspect CCXT-supported venues:
+
+```powershell
+python -m pip install -e ".[exchange]"
+```
 
 Send a test signal:
 
@@ -63,6 +70,14 @@ When a signed request is accepted, the same timestamp/body pair is rejected on r
 - `GET /orders`: accepted paper orders
 - `GET /positions`: current paper portfolio positions
 - `GET /audit`: signal and order lifecycle audit events
+
+## Exchange Discovery
+
+- `GET /exchanges`: returns paper mode plus installed CCXT exchange IDs
+- `GET /exchanges/paper/capabilities`: returns paper execution capabilities
+- `GET /exchanges/{exchange_id}/capabilities`: returns CCXT-reported venue capabilities when `auto-crypto[exchange]` is installed
+
+Exchange discovery does not enable live trading by itself. Live order placement still requires an explicit adapter path and exchange API keys without withdrawal permissions.
 
 ## Paper Price Updates
 

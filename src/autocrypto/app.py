@@ -10,6 +10,12 @@ from fastapi import FastAPI, HTTPException, Request
 from .approvals import ApprovalQueue
 from .config import load_settings
 from .engine import TradingEngine
+from .exchanges.ccxt_adapter import (
+    CcxtExchangeAdapter,
+    CcxtNotInstalledError,
+    ExchangeCapabilities,
+    list_ccxt_exchange_ids,
+)
 from .execution import PaperExchange
 from .repository import SQLiteRepository
 from .risk import AccountState, RiskConfig
@@ -132,6 +138,32 @@ def create_app(
     def positions() -> dict[str, Any]:
         return {"positions": engine.exchange.list_positions()}
 
+    @app.get("/exchanges")
+    def exchanges() -> dict[str, Any]:
+        exchange_rows = [{"exchange_id": "paper", "driver": "paper", "live_trading": False}]
+        try:
+            ccxt_exchange_ids = list_ccxt_exchange_ids()
+        except CcxtNotInstalledError:
+            return {"ccxt_available": False, "exchanges": exchange_rows}
+
+        exchange_rows.extend(
+            {"exchange_id": exchange_id, "driver": "ccxt", "live_trading": True}
+            for exchange_id in ccxt_exchange_ids
+        )
+        return {"ccxt_available": True, "exchanges": exchange_rows}
+
+    @app.get("/exchanges/{exchange_id}/capabilities")
+    def exchange_capabilities(exchange_id: str) -> dict[str, Any]:
+        if exchange_id == "paper":
+            return {"capabilities": _paper_capabilities().to_dict()}
+        try:
+            capabilities = CcxtExchangeAdapter(exchange_id).capabilities()
+        except CcxtNotInstalledError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"capabilities": capabilities.to_dict()}
+
     @app.post("/market/price")
     async def market_price(request: Request) -> dict[str, Any]:
         payload = await request.json()
@@ -249,3 +281,17 @@ def _positive_decimal(value: Any) -> Decimal:
     if parsed <= 0:
         raise ValueError("price must be positive")
     return parsed
+
+
+def _paper_capabilities() -> ExchangeCapabilities:
+    return ExchangeCapabilities(
+        exchange_id="paper",
+        spot=True,
+        margin=False,
+        swap=False,
+        future=False,
+        option=False,
+        create_order=True,
+        cancel_order=False,
+        fetch_balance=False,
+    )
