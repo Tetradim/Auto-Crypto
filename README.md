@@ -9,7 +9,7 @@ Auto-Crypto is a paper-first crypto trading automation service for Discord and w
 - Strict crypto signal normalization for pairs such as `BTCUSDT` and `BTC/USDT`
 - Duplicate signal suppression with idempotency keys, including SQLite-backed restart safety
 - Pre-trade risk checks for stop-loss requirement, max notional, leverage, slippage, allowed venues, blocked symbols, and daily loss
-- Paper exchange that records accepted orders, planned stop-loss/take-profit exits, and triggered paper exits
+- Paper exchange that records accepted orders, planned stop-loss/take-profit exits, and triggered paper exits per filled lot
 - Minimal Discord slash-command client using `/health` and `/signal_test`
 - Optional CCXT adapter boundary for future live exchange integrations
 - Exchange discovery and capability reporting for paper mode and installed CCXT venues
@@ -87,6 +87,7 @@ Signals whose `exchange` value is not in `AUTO_CRYPTO_ALLOWED_EXCHANGES` are rej
 ## Paper Price Updates
 
 Use `POST /market/price` to feed paper-mode market prices into the bracket engine. When the new price crosses an active stop loss or take profit, Auto-Crypto records a synthetic sell order, closes the paper position, updates realized PnL, and records an `exit.triggered` audit event.
+Multiple entries on the same symbol keep independent paper lots, so one take-profit or stop-loss trigger closes only the matching lot instead of flattening the whole symbol.
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/market/price -ContentType "application/json" -Body '{

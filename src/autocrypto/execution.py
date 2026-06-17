@@ -17,6 +17,15 @@ class ExitOrder:
 
 
 @dataclass
+class PaperLot:
+    signal_id: str
+    symbol: str
+    remaining_quantity: Decimal
+    entry_price: Decimal
+    exit_orders: list[ExitOrder] = field(default_factory=list)
+
+
+@dataclass
 class PaperPosition:
     symbol: str
     quantity: Decimal = Decimal("0")
@@ -108,14 +117,17 @@ class PaperExchange:
     def __init__(self) -> None:
         self.orders: list[PaperOrder] = []
         self.positions: dict[str, PaperPosition] = {}
+        self.lots: list[PaperLot] = []
         self.active_exits: dict[str, list[ExitOrder]] = {}
 
     def submit(self, signal: CryptoSignal, decision: RiskDecision) -> PaperOrder:
         if decision.order_notional is None:
             raise ValueError("approved order requires notional")
         exit_orders = build_exit_orders(signal)
+        quantity: Decimal | None = None
         if signal.price is not None:
-            self._apply_fill(signal, decision.order_notional)
+            quantity = self._fill_quantity(signal, decision.order_notional)
+            self._apply_fill(signal, quantity)
         order = PaperOrder(
             order_id=f"paper-{signal.signal_id}",
             signal_id=signal.signal_id,
@@ -128,10 +140,19 @@ class PaperExchange:
             exit_orders=exit_orders,
         )
         self.orders.append(order)
-        if signal.side == "buy" and exit_orders:
-            self.active_exits[signal.symbol] = exit_orders
-        elif signal.side == "sell" and not self._has_open_position(signal.symbol):
-            self.active_exits.pop(signal.symbol, None)
+        if signal.side == "buy" and exit_orders and quantity is not None and signal.price is not None:
+            self.lots.append(
+                PaperLot(
+                    signal_id=signal.signal_id,
+                    symbol=signal.symbol,
+                    remaining_quantity=quantity,
+                    entry_price=signal.price,
+                    exit_orders=exit_orders,
+                )
+            )
+        elif signal.side == "sell" and quantity is not None:
+            self._reduce_lots(signal.symbol, quantity)
+        self._refresh_active_exits(signal.symbol)
         return order
 
     def list_positions(self) -> list[dict]:
@@ -146,48 +167,106 @@ class PaperExchange:
         if position is None or position.quantity <= 0:
             return []
 
-        exit_order = self._triggered_exit(symbol, price)
-        if exit_order is None:
-            return []
+        triggered: list[dict] = []
+        for lot in list(self.lots):
+            if lot.symbol != symbol or lot.remaining_quantity <= 0:
+                continue
+            exit_order = self._triggered_exit(lot, price)
+            if exit_order is None:
+                continue
 
-        notional = position.quantity * price
-        position.sell(position.quantity, price)
-        order = PaperOrder(
-            order_id=f"paper-exit-{_order_fragment(symbol)}-{len(self.orders) + 1}",
-            signal_id=f"exit-{_order_fragment(symbol)}-{len(self.orders) + 1}",
-            mode="paper",
-            exchange="paper",
-            symbol=symbol,
-            side="sell",
-            notional=notional,
-            price=price,
-        )
-        self.orders.append(order)
-        self.active_exits.pop(symbol, None)
-        return [{"symbol": symbol, "kind": exit_order.kind, "price": _fixed8(price)}]
+            exit_quantity = lot.remaining_quantity
+            notional = exit_quantity * price
+            self._close_lot(lot, price)
+            order_number = len(self.orders) + 1
+            order = PaperOrder(
+                order_id=f"paper-exit-{_order_fragment(lot.signal_id)}-{order_number}",
+                signal_id=f"exit-{_order_fragment(lot.signal_id)}-{order_number}",
+                mode="paper",
+                exchange="paper",
+                symbol=symbol,
+                side="sell",
+                notional=notional,
+                price=price,
+            )
+            self.orders.append(order)
+            triggered.append({"symbol": symbol, "kind": exit_order.kind, "price": _fixed8(price)})
 
-    def _apply_fill(self, signal: CryptoSignal, notional: Decimal) -> None:
+        self.lots = [lot for lot in self.lots if lot.remaining_quantity > 0]
+        self._refresh_active_exits(symbol)
+        return triggered
+
+    def _fill_quantity(self, signal: CryptoSignal, notional: Decimal) -> Decimal:
+        if signal.price is None:
+            return Decimal("0")
+        return signal.base_amount if signal.base_amount is not None else notional / signal.price
+
+    def _apply_fill(self, signal: CryptoSignal, quantity: Decimal) -> None:
         if signal.price is None:
             return
-        quantity = signal.base_amount if signal.base_amount is not None else notional / signal.price
         position = self.positions.setdefault(signal.symbol, PaperPosition(symbol=signal.symbol))
         if signal.side == "buy":
             position.buy(quantity, signal.price)
         elif signal.side == "sell":
             position.sell(quantity, signal.price)
 
-    def _triggered_exit(self, symbol: str, price: Decimal) -> ExitOrder | None:
-        for exit_order in self.active_exits.get(symbol, []):
+    def _triggered_exit(self, lot: PaperLot, price: Decimal) -> ExitOrder | None:
+        for exit_order in lot.exit_orders:
             if exit_order.kind == "stop_loss" and price <= exit_order.trigger_price:
                 return exit_order
-        for exit_order in self.active_exits.get(symbol, []):
+        for exit_order in lot.exit_orders:
             if exit_order.kind == "take_profit" and price >= exit_order.trigger_price:
                 return exit_order
         return None
 
-    def _has_open_position(self, symbol: str) -> bool:
+    def _close_lot(self, lot: PaperLot, price: Decimal) -> None:
+        position = self.positions.get(lot.symbol)
+        if position is None:
+            lot.remaining_quantity = Decimal("0")
+            return
+        exit_quantity = min(lot.remaining_quantity, position.quantity)
+        position.realized_pnl += (price - lot.entry_price) * exit_quantity
+        position.quantity -= exit_quantity
+        lot.remaining_quantity -= exit_quantity
+        if position.quantity <= 0:
+            position.quantity = Decimal("0")
+            position.avg_entry = Decimal("0")
+        else:
+            self._refresh_position_average(lot.symbol)
+
+    def _reduce_lots(self, symbol: str, quantity: Decimal) -> None:
+        remaining = quantity
+        for lot in self.lots:
+            if remaining <= 0 or lot.symbol != symbol or lot.remaining_quantity <= 0:
+                continue
+            reduction = min(lot.remaining_quantity, remaining)
+            lot.remaining_quantity -= reduction
+            remaining -= reduction
+        self.lots = [lot for lot in self.lots if lot.remaining_quantity > 0]
+
+    def _refresh_position_average(self, symbol: str) -> None:
         position = self.positions.get(symbol)
-        return position is not None and position.quantity > 0
+        if position is None or position.quantity <= 0:
+            return
+        open_lots = [lot for lot in self.lots if lot.symbol == symbol and lot.remaining_quantity > 0]
+        lot_quantity = sum((lot.remaining_quantity for lot in open_lots), Decimal("0"))
+        if lot_quantity == position.quantity and lot_quantity > 0:
+            position.avg_entry = (
+                sum((lot.entry_price * lot.remaining_quantity for lot in open_lots), Decimal("0"))
+                / lot_quantity
+            )
+
+    def _refresh_active_exits(self, symbol: str) -> None:
+        exits = [
+            exit_order
+            for lot in self.lots
+            if lot.symbol == symbol and lot.remaining_quantity > 0
+            for exit_order in lot.exit_orders
+        ]
+        if exits:
+            self.active_exits[symbol] = exits
+        else:
+            self.active_exits.pop(symbol, None)
 
 
 def build_exit_orders(signal: CryptoSignal) -> list[ExitOrder]:
