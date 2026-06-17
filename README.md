@@ -12,6 +12,7 @@ Auto-Crypto is a paper-first crypto trading automation service for Discord and w
 - Minimal Discord slash-command client using `/health` and `/signal_test`
 - Optional CCXT adapter boundary for future live exchange integrations
 - Optional HMAC-signed webhook verification through `AUTO_CRYPTO_WEBHOOK_SECRET`
+- SQLite repository for signal, paper-order, and audit history
 
 Live trading is intentionally not enabled by default. Do not grant withdrawal permissions to exchange API keys.
 
@@ -47,6 +48,14 @@ Set `AUTO_CRYPTO_WEBHOOK_SECRET` to require signed webhook alerts. Signed reques
 
 The digest is `HMAC_SHA256(secret, timestamp + "." + raw_request_body)`.
 
+When a signed request is accepted, the same timestamp/body pair is rejected on repeat as a replay. Apps that pass a webhook tolerance reject stale timestamps.
+
+## History Endpoints
+
+- `GET /signals`: accepted normalized signals
+- `GET /orders`: accepted paper orders
+- `GET /audit`: signal and order lifecycle audit events
+
 ## Signal Schema
 
 Required:
@@ -68,8 +77,8 @@ Forbidden signal actions include withdrawal and transfer actions.
 
 ## Roadmap
 
-1. Persist orders, signals, risk decisions, and audit events in SQLite/PostgreSQL.
-2. Add timestamp replay windows and nonce storage for signed webhooks.
-3. Expand Discord controls with approve/reject/halt flows.
-4. Add official sandbox/live adapters behind explicit config gates.
-5. Add portfolio reconciliation and exchange user-stream workers.
+1. Load repository and risk settings from environment/application config.
+2. Expand Discord controls with approve/reject/halt flows.
+3. Add official sandbox/live adapters behind explicit config gates.
+4. Add portfolio reconciliation and exchange user-stream workers.
+5. Add PostgreSQL deployment option for multi-user hosting.
