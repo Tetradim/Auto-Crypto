@@ -13,6 +13,7 @@ class RiskConfig:
     max_daily_loss: Decimal = Decimal("500")
     require_stop_loss: bool = True
     max_slippage_bps: int = 100
+    allowed_exchanges: set[str] = field(default_factory=lambda: {"paper"})
     allowed_symbols: set[str] = field(default_factory=set)
     blocked_symbols: set[str] = field(default_factory=set)
 
@@ -43,6 +44,8 @@ def evaluate_signal(
         reasons.append("symbol_not_allowed")
     if signal.symbol in config.blocked_symbols:
         reasons.append("symbol_blocked")
+    if config.allowed_exchanges and signal.exchange not in config.allowed_exchanges:
+        reasons.append("exchange_not_allowed")
     if config.require_stop_loss and signal.side == "buy" and signal.stop_loss_pct is None:
         reasons.append("stop_loss_required")
     if order_notional is not None and config.max_order_notional > 0 and order_notional > config.max_order_notional:
@@ -67,4 +70,3 @@ def _order_notional(signal: CryptoSignal, reasons: list[str]) -> Decimal | None:
         return signal.base_amount * signal.price
     reasons.append("order_size_required")
     return None
-

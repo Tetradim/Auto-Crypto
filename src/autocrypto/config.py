@@ -33,6 +33,7 @@ def load_settings() -> AppSettings:
             max_daily_loss=Decimal(os.getenv("AUTO_CRYPTO_MAX_DAILY_LOSS", "500")),
             require_stop_loss=_bool(os.getenv("AUTO_CRYPTO_REQUIRE_STOP_LOSS", "true")),
             max_slippage_bps=int(os.getenv("AUTO_CRYPTO_MAX_SLIPPAGE_BPS", "100")),
+            allowed_exchanges=_csv_set(os.getenv("AUTO_CRYPTO_ALLOWED_EXCHANGES", "paper")),
         ),
     )
 
@@ -46,3 +47,7 @@ def _empty_to_none(value: str | None) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def _csv_set(value: str) -> set[str]:
+    return {part.strip().lower() for part in value.split(",") if part.strip()}

@@ -55,3 +55,44 @@ def test_risk_approves_valid_signal_and_reports_notional():
     assert decision.order_notional == Decimal("300")
     assert decision.reason_codes == []
 
+
+def test_risk_rejects_exchange_not_allowlisted_by_default():
+    signal = normalize_signal(
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "50000",
+            "stop_loss_pct": "2",
+            "exchange": "binance",
+        },
+        source="test",
+    )
+
+    decision = evaluate_signal(signal, RiskConfig(), AccountState())
+
+    assert decision.approved is False
+    assert "exchange_not_allowed" in decision.reason_codes
+
+
+def test_risk_allows_explicitly_allowlisted_exchange():
+    signal = normalize_signal(
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "50000",
+            "stop_loss_pct": "2",
+            "exchange": "binance",
+        },
+        source="test",
+    )
+
+    decision = evaluate_signal(
+        signal,
+        RiskConfig(allowed_exchanges={"paper", "binance"}),
+        AccountState(),
+    )
+
+    assert decision.approved is True
+    assert decision.reason_codes == []

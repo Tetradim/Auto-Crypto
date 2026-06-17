@@ -7,7 +7,7 @@ Auto-Crypto is a paper-first crypto trading automation service for Discord and w
 - TradingView/custom webhook endpoint: `POST /webhooks/tradingview`
 - Strict crypto signal normalization for pairs such as `BTCUSDT` and `BTC/USDT`
 - Duplicate signal suppression with idempotency keys
-- Pre-trade risk checks for stop-loss requirement, max notional, leverage, slippage, blocked symbols, and daily loss
+- Pre-trade risk checks for stop-loss requirement, max notional, leverage, slippage, allowed venues, blocked symbols, and daily loss
 - Paper exchange that records accepted orders, planned stop-loss/take-profit exits, and triggered paper exits
 - Minimal Discord slash-command client using `/health` and `/signal_test`
 - Optional CCXT adapter boundary for future live exchange integrations
@@ -33,6 +33,7 @@ python -m uvicorn autocrypto.app:app --reload
 ```
 
 For environment-backed settings, import and run `autocrypto.app:create_app_from_env()` from your ASGI launcher. `AUTO_CRYPTO_DB_PATH` enables SQLite persistence, and `AUTO_CRYPTO_WEBHOOK_SECRET` enables signed webhook enforcement.
+`AUTO_CRYPTO_ALLOWED_EXCHANGES` defaults to `paper`; add venue IDs such as `binance` or `kraken` only after API keys and live execution controls are ready.
 
 Install the optional exchange extras to inspect CCXT-supported venues:
 
@@ -78,6 +79,7 @@ When a signed request is accepted, the same timestamp/body pair is rejected on r
 - `GET /exchanges/{exchange_id}/capabilities`: returns CCXT-reported venue capabilities when `auto-crypto[exchange]` is installed
 
 Exchange discovery does not enable live trading by itself. Live order placement still requires an explicit adapter path and exchange API keys without withdrawal permissions.
+Signals whose `exchange` value is not in `AUTO_CRYPTO_ALLOWED_EXCHANGES` are rejected by risk checks.
 
 ## Paper Price Updates
 
@@ -122,6 +124,7 @@ Recommended:
 - `exchange`
 
 Forbidden signal actions include withdrawal and transfer actions.
+The default allowed exchange is `paper`; alert-supplied live venue IDs must be configured before risk approval.
 
 ## Text Alert Format
 
