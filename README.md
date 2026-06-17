@@ -1,109 +1,102 @@
 # Auto-Crypto
 
-Auto-Crypto is a paper-first crypto trading automation service for Discord and webhook-driven alerts. The first implementation slice focuses on safe signal intake, risk checks, idempotency, and paper execution with bracket-style exits.
+Auto-Crypto is a paper-first crypto trading automation bot for Discord-style alerts, TradingView webhooks, and operator-controlled execution workflows. It is built to normalize crypto alerts, apply risk checks, queue approvals when required, simulate fills, track bracket exits, and persist audit history before any live exchange adapter is enabled.
 
-## Current Capabilities
+Live trading is intentionally disabled by default. Use exchange API keys with trade-only permissions, no withdrawals, and only after sandbox validation.
 
-- TradingView/custom webhook endpoint: `POST /webhooks/tradingview`
-- Text alert webhook endpoint: `POST /webhooks/text-alert`
-- Strict crypto signal normalization for pairs such as `BTCUSDT` and `BTC/USDT`
-- Duplicate signal suppression with idempotency keys, including SQLite-backed restart safety
-- Pre-trade risk checks for stop-loss requirement, max order notional, max open notional, leverage, slippage, allowed venues, blocked symbols, and daily loss
-- Paper exchange that records accepted orders, planned stop-loss/take-profit exits, and triggered paper exits per filled lot
-- Minimal Discord slash-command client using `/health` and `/signal_test`
-- Optional CCXT adapter boundary for future live exchange integrations
-- Exchange discovery and capability reporting for paper mode and installed CCXT venues
-- Optional HMAC-signed webhook verification through `AUTO_CRYPTO_WEBHOOK_SECRET`
-- SQLite repository for signal, paper-order, and audit history
-- Operator halt/resume controls that block new orders and record audit events
-- Paper portfolio accounting with weighted average entry and realized PnL, rehydrated from SQLite order history on restart
-- Paper market price updates that trigger stop-loss/take-profit exits and audit events
-- Approval-required mode for human review before order execution, with SQLite-backed pending approvals
-- Conservative text alert parser for Discord-style messages
+## What It Does Now
 
-Live trading is intentionally not enabled by default. Do not grant withdrawal permissions to exchange API keys.
+- Runs a local FastAPI bot/API on Windows with `Launch-Auto-Crypto.bat`
+- Accepts TradingView/custom JSON alerts at `POST /webhooks/tradingview`
+- Accepts strict text crypto alerts at `POST /webhooks/text-alert`
+- Parses text alerts without ordering at `POST /signals/parse-text`
+- Normalizes crypto pairs such as `BTCUSDT`, `BTC/USDT`, `ETH-USDC`, and `SOL_USDT`
+- Blocks duplicate signal IDs across restarts with SQLite-backed idempotency
+- Applies pre-trade risk checks for stop loss, max order notional, max open notional, leverage, slippage, allowed exchanges, blocked symbols, and daily loss
+- Supports approval-required mode with persisted pending approvals
+- Records paper orders, paper positions, realized PnL, active bracket lots, and audit events
+- Rehydrates paper positions, bracket lots, and exposure risk state from SQLite after restart
+- Triggers paper stop-loss/take-profit exits from `POST /market/price`
+- Exposes CCXT venue discovery and capability inspection without enabling live execution
+- Provides a minimal Discord slash-command client for `/health` and `/signal_test`
 
-## Quick Start
+## Windows Launcher
 
-On Windows, double-click `Launch-Auto-Crypto.bat` from the repo root. The launcher creates `.venv` if needed, installs Auto-Crypto, starts the API with SQLite persistence, and opens the API docs.
+Double-click:
 
-Useful launcher switches:
+```text
+Launch-Auto-Crypto.bat
+```
+
+The launcher:
+
+- Creates `.venv` when missing
+- Installs Auto-Crypto dependencies when needed
+- Starts the API from `autocrypto.app:create_app_from_env`
+- Uses persistent SQLite at `data/auto_crypto.sqlite3`
+- Opens the FastAPI docs in your browser
+- Stops processes it started when the launcher window closes
+
+Useful switches:
 
 ```powershell
 .\Launch-Auto-Crypto.bat -Port 8004 -InstallDeps
 .\Launch-Auto-Crypto.bat -ExchangeDeps
 .\Launch-Auto-Crypto.bat -StartDiscord
+.\Launch-Auto-Crypto.bat -NoBrowser
 ```
 
-`-StartDiscord` requires `DISCORD_BOT_TOKEN` in the environment. Without it, the launcher starts the FastAPI webhook/API bot only.
-The workstation suite reserves frontend port `3004` for Auto-Crypto, but this checkout currently exposes API docs from the backend on port `8004`.
+`-StartDiscord` requires `DISCORD_BOT_TOKEN` in the environment. Without it, the launcher starts the webhook/API bot only.
+
+The workstation suite reserves frontend port `3004` for Auto-Crypto. This checkout currently exposes API docs from the backend on port `8004`.
+
+## Manual Start
 
 ```powershell
 python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 python -m pytest
-python -m uvicorn autocrypto.app:app --reload
+python -m uvicorn autocrypto.app:create_app_from_env --factory --host 127.0.0.1 --port 8004
 ```
 
-For environment-backed settings, import and run `autocrypto.app:create_app_from_env()` from your ASGI launcher. `AUTO_CRYPTO_DB_PATH` enables SQLite persistence, and `AUTO_CRYPTO_WEBHOOK_SECRET` enables signed webhook enforcement.
-`AUTO_CRYPTO_ALLOWED_EXCHANGES` defaults to `paper`; add venue IDs such as `binance` or `kraken` only after API keys and live execution controls are ready.
-Set `AUTO_CRYPTO_MAX_OPEN_NOTIONAL` above `0` to cap cumulative open buy exposure across accepted orders.
-SQLite-backed paper state restores open exposure after restart, and triggered paper exits release exposure for later risk checks.
-
-Install the optional exchange extras to inspect CCXT-supported venues:
+Install optional CCXT support for venue discovery:
 
 ```powershell
 python -m pip install -e ".[exchange]"
 ```
 
-Send a test signal:
+## Core Crypto Workflow
+
+1. Send a JSON alert from TradingView or another alert source.
+2. Auto-Crypto normalizes the crypto symbol, side, size, price, exchange, and strategy metadata.
+3. Risk checks approve, reject, queue, or halt the signal.
+4. In paper mode, the bot records an accepted order and updates the paper portfolio.
+5. Price updates can trigger paper stop-loss or take-profit exits.
+6. Signals, orders, positions, approvals, and audit events are stored in SQLite when `AUTO_CRYPTO_DB_PATH` is set.
+
+## Send A Test Crypto Alert
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/webhooks/tradingview -ContentType "application/json" -Body '{
+  "signal_id": "btc-breakout-001",
   "symbol": "BTCUSDT",
   "side": "buy",
   "quote_amount": "25",
   "price": "50000",
   "stop_loss_pct": "2",
-  "take_profit_pct": "3"
+  "take_profit_pct": "3",
+  "strategy_id": "breakout"
 }'
 ```
 
-## Signed Webhooks
+Check positions:
 
-Set `AUTO_CRYPTO_WEBHOOK_SECRET` to require signed webhook alerts. Signed requests must include:
+```powershell
+Invoke-RestMethod http://127.0.0.1:8004/positions
+```
 
-- `x-auto-crypto-timestamp`: timestamp string chosen by the sender
-- `x-auto-crypto-signature`: `sha256=<hex digest>`
-
-The digest is `HMAC_SHA256(secret, timestamp + "." + raw_request_body)`.
-
-When a signed request is accepted, the same timestamp/body pair is rejected on repeat as a replay. Apps that pass a webhook tolerance reject stale timestamps.
-
-## History Endpoints
-
-- `GET /signals`: accepted normalized signals
-- `GET /orders`: accepted paper orders
-- `GET /positions`: current paper portfolio positions
-- `GET /audit`: signal and order lifecycle audit events
-
-When `AUTO_CRYPTO_DB_PATH` is enabled, signal IDs are claimed with an insert-only write before approval or execution. Replayed signal IDs after a service restart return `status=duplicate` and record a `signal.duplicate` audit event.
-Paper orders persisted in SQLite are replayed at startup to restore paper positions and active bracket lots.
-
-## Exchange Discovery
-
-- `GET /exchanges`: returns paper mode plus installed CCXT exchange IDs with separate `driver_available`, `credentials_configured`, and `live_execution_enabled` flags
-- `GET /exchanges/paper/capabilities`: returns paper execution capabilities
-- `GET /exchanges/{exchange_id}/capabilities`: returns CCXT-reported venue capabilities when `auto-crypto[exchange]` is installed
-
-Exchange discovery does not enable live trading by itself. CCXT rows mean the adapter driver can be inspected, not that credentials are configured or live order placement is enabled.
-Signals whose `exchange` value is not in `AUTO_CRYPTO_ALLOWED_EXCHANGES` are rejected by risk checks.
-
-## Paper Price Updates
-
-Use `POST /market/price` to feed paper-mode market prices into the bracket engine. When the new price crosses an active stop loss or take profit, Auto-Crypto records a synthetic sell order, closes the paper position, updates realized PnL, and records an `exit.triggered` audit event.
-Multiple entries on the same symbol keep independent paper lots, so one take-profit or stop-loss trigger closes only the matching lot instead of flattening the whole symbol.
+Trigger a paper take-profit:
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/market/price -ContentType "application/json" -Body '{
@@ -112,57 +105,194 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/market/price -ContentT
 }'
 ```
 
-## Operator Controls
+## Text Crypto Alerts
 
-- `GET /control/status`: halt status
-- `POST /control/halt` with `{"reason": "..."}`: blocks new order execution
-- `POST /control/resume`: resumes new order execution
+The text parser is intentionally strict so Discord-style alerts are explicit and auditable.
 
-## Approval Mode
-
-Set `AUTO_CRYPTO_REQUIRE_APPROVAL=true` or call `create_app(require_approval=True)` to queue incoming signals instead of executing immediately.
-When `AUTO_CRYPTO_DB_PATH` is enabled, pending approvals survive service restarts and can be approved or rejected by any later app instance using the same database.
-
-- `GET /approvals`: pending signals
-- `POST /approvals/{signal_id}/approve`: executes the queued signal through the normal risk and execution path
-- `POST /approvals/{signal_id}/reject` with `{"reason": "..."}`: removes the queued signal and records an audit event
-
-## Signal Schema
-
-Required:
-
-- `symbol` or `ticker`
-- `side` or `action`
-- `quote_amount`, `notional`, `base_amount`, `quantity`, or `qty`
-
-Recommended:
-
-- `price`
-- `stop_loss_pct`
-- `take_profit_pct`
-- `max_slippage_bps`
-- `strategy_id`
-- `exchange`
-
-Forbidden signal actions include withdrawal and transfer actions.
-The default allowed exchange is `paper`; alert-supplied live venue IDs must be configured before risk approval.
-
-## Text Alert Format
-
-The text parser is intentionally strict. Supported examples:
+Supported examples:
 
 ```text
 BUY BTCUSDT $125 @ 50000 SL 2.5% TP 5%
 SELL ETH/USDT 0.25 @ 3000
 ```
 
-Use `POST /signals/parse-text` with `{"message": "..."}` to validate a message without placing an order.
-Use `POST /webhooks/text-alert` with the same payload shape to run the parsed alert through duplicate checks, risk, approval mode, and paper execution.
+Validate text without placing an order:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/signals/parse-text -ContentType "application/json" -Body '{
+  "message": "BUY SOLUSDT $50 @ 150 SL 3% TP 8%"
+}'
+```
+
+Run parsed text through the normal duplicate, risk, approval, and paper execution path:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/webhooks/text-alert -ContentType "application/json" -Body '{
+  "message": "BUY SOLUSDT $50 @ 150 SL 3% TP 8%"
+}'
+```
+
+## Signal Schema
+
+Required fields:
+
+- `symbol`, `ticker`, or `pair`
+- `side` or `action`
+- `quote_amount`, `notional`, `base_amount`, `quantity`, or `qty`
+
+Recommended fields:
+
+- `signal_id`
+- `price`, `entry_price`, or `limit_price`
+- `stop_loss_pct`
+- `take_profit_pct`
+- `max_slippage_bps`
+- `strategy_id` or `strategy`
+- `exchange` or `venue`
+- `market_type`
+
+Forbidden actions include `withdraw`, `transfer`, `internal_transfer`, and `deposit`.
+
+## Risk Controls
+
+Risk checks run before paper execution:
+
+- `stop_loss_required`
+- `max_order_notional_exceeded`
+- `max_open_notional_exceeded`
+- `max_leverage_exceeded`
+- `max_slippage_exceeded`
+- `exchange_not_allowed`
+- `symbol_not_allowed`
+- `symbol_blocked`
+- `daily_loss_limit_exceeded`
+- `price_required_for_base_amount`
+
+Set `AUTO_CRYPTO_MAX_OPEN_NOTIONAL` above `0` to cap cumulative open buy exposure. SQLite-backed paper state restores open exposure after restart, and triggered paper exits release exposure for later risk checks.
+
+## Environment Variables
+
+```env
+AUTO_CRYPTO_HOST=127.0.0.1
+AUTO_CRYPTO_PORT=8004
+AUTO_CRYPTO_REQUIRE_APPROVAL=false
+AUTO_CRYPTO_DB_PATH=./data/auto_crypto.sqlite3
+
+AUTO_CRYPTO_WEBHOOK_SECRET=
+AUTO_CRYPTO_WEBHOOK_TOLERANCE_SECONDS=300
+
+AUTO_CRYPTO_MAX_ORDER_NOTIONAL=1000
+AUTO_CRYPTO_MAX_OPEN_NOTIONAL=0
+AUTO_CRYPTO_MAX_LEVERAGE=1
+AUTO_CRYPTO_MAX_DAILY_LOSS=500
+AUTO_CRYPTO_MAX_SLIPPAGE_BPS=100
+AUTO_CRYPTO_REQUIRE_STOP_LOSS=true
+
+AUTO_CRYPTO_DEFAULT_EXCHANGE=paper
+AUTO_CRYPTO_ALLOWED_EXCHANGES=paper
+
+DISCORD_BOT_TOKEN=
+```
+
+## Signed Webhooks
+
+Set `AUTO_CRYPTO_WEBHOOK_SECRET` to require HMAC-signed alert requests. Signed requests must include:
+
+- `x-auto-crypto-timestamp`
+- `x-auto-crypto-signature`
+
+Signature format:
+
+```text
+sha256=<hex digest>
+```
+
+Digest payload:
+
+```text
+timestamp + "." + raw_request_body
+```
+
+Accepted signed payloads are replay-protected. Stale timestamps are rejected when `AUTO_CRYPTO_WEBHOOK_TOLERANCE_SECONDS` is set.
+
+## Main Endpoints
+
+Health and history:
+
+- `GET /health`
+- `GET /signals`
+- `GET /orders`
+- `GET /positions`
+- `GET /audit`
+
+Signal intake:
+
+- `POST /webhooks/tradingview`
+- `POST /webhooks/text-alert`
+- `POST /signals/parse-text`
+
+Paper market updates:
+
+- `POST /market/price`
+
+Operator controls:
+
+- `GET /control/status`
+- `POST /control/halt`
+- `POST /control/resume`
+
+Approval mode:
+
+- `GET /approvals`
+- `POST /approvals/{signal_id}/approve`
+- `POST /approvals/{signal_id}/reject`
+
+Exchange inspection:
+
+- `GET /exchanges`
+- `GET /exchanges/paper/capabilities`
+- `GET /exchanges/{exchange_id}/capabilities`
+
+## Approval Mode
+
+Set `AUTO_CRYPTO_REQUIRE_APPROVAL=true` or call `create_app(require_approval=True)` to queue incoming signals instead of executing immediately.
+
+When `AUTO_CRYPTO_DB_PATH` is enabled, pending approvals survive service restarts and can be approved or rejected by any later app instance using the same database.
+
+## Exchange Discovery
+
+`GET /exchanges` returns paper mode plus installed CCXT exchange IDs with separate flags:
+
+- `driver_available`
+- `credentials_configured`
+- `live_execution_enabled`
+
+CCXT discovery does not enable live trading. It means the adapter driver can be inspected. Live order placement still needs explicit implementation, credentials, configuration gates, and exchange API keys without withdrawal permissions.
+
+Signals whose `exchange` value is not in `AUTO_CRYPTO_ALLOWED_EXCHANGES` are rejected by risk checks. The default allowed exchange is `paper`.
+
+## Persistence
+
+When SQLite is enabled:
+
+- Signal IDs are claimed with insert-only idempotency writes.
+- Duplicate signal IDs after restart return `status=duplicate`.
+- Pending approvals persist across restarts.
+- Paper orders are replayed at startup to restore positions, active bracket lots, and open exposure.
+- Paper price exits are saved as synthetic sell orders.
+
+## Safety Notes
+
+- Paper mode is the default and only execution path currently enabled.
+- Do not use exchange API keys with withdrawal permissions.
+- Do not allow non-paper exchange IDs until live execution controls are explicitly implemented and tested.
+- Use signed webhooks for any alert source exposed beyond localhost.
+- Treat alert text as commands. Keep formats strict and auditable.
 
 ## Roadmap
 
-1. Wire Discord buttons to approval/halt endpoints.
-2. Add official sandbox/live adapters behind explicit config gates.
+1. Wire Discord buttons to approval, reject, halt, and resume endpoints.
+2. Add sandbox/live exchange adapters behind explicit configuration gates.
 3. Add portfolio reconciliation and exchange user-stream workers.
-4. Add PostgreSQL deployment option for multi-user hosting.
-5. Add deployment manifests and CI.
+4. Add PostgreSQL deployment support for hosted or multi-user operation.
+5. Add CI, deployment manifests, and packaged installer support.
