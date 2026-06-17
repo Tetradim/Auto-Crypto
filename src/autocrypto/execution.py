@@ -120,6 +120,13 @@ class PaperExchange:
         self.lots: list[PaperLot] = []
         self.active_exits: dict[str, list[ExitOrder]] = {}
 
+    @classmethod
+    def from_order_history(cls, orders: list[dict]) -> PaperExchange:
+        exchange = cls()
+        for payload in orders:
+            exchange._replay_order(_paper_order_from_dict(payload))
+        return exchange
+
     def submit(self, signal: CryptoSignal, decision: RiskDecision) -> PaperOrder:
         if decision.order_notional is None:
             raise ValueError("approved order requires notional")
@@ -210,6 +217,29 @@ class PaperExchange:
         elif signal.side == "sell":
             position.sell(quantity, signal.price)
 
+    def _replay_order(self, order: PaperOrder) -> None:
+        self.orders.append(order)
+        if order.price is None:
+            return
+        quantity = order.notional / order.price
+        position = self.positions.setdefault(order.symbol, PaperPosition(symbol=order.symbol))
+        if order.side == "buy":
+            position.buy(quantity, order.price)
+            if order.exit_orders:
+                self.lots.append(
+                    PaperLot(
+                        signal_id=order.signal_id,
+                        symbol=order.symbol,
+                        remaining_quantity=quantity,
+                        entry_price=order.price,
+                        exit_orders=order.exit_orders,
+                    )
+                )
+        elif order.side == "sell":
+            position.sell(quantity, order.price)
+            self._reduce_lots(order.symbol, quantity)
+        self._refresh_active_exits(order.symbol)
+
     def _triggered_exit(self, lot: PaperLot, price: Decimal) -> ExitOrder | None:
         for exit_order in lot.exit_orders:
             if exit_order.kind == "stop_loss" and price <= exit_order.trigger_price:
@@ -293,3 +323,21 @@ def _fixed8(value: Decimal) -> str:
 
 def _order_fragment(symbol: str) -> str:
     return symbol.replace("/", "-").lower()
+
+
+def _paper_order_from_dict(payload: dict) -> PaperOrder:
+    return PaperOrder(
+        order_id=str(payload["order_id"]),
+        signal_id=str(payload["signal_id"]),
+        mode=str(payload["mode"]),
+        exchange=str(payload["exchange"]),
+        symbol=str(payload["symbol"]),
+        side=str(payload["side"]),
+        notional=Decimal(str(payload["notional"])),
+        price=Decimal(str(payload["price"])) if payload.get("price") is not None else None,
+        exit_orders=[
+            ExitOrder(kind=str(exit_order["kind"]), trigger_price=Decimal(str(exit_order["trigger_price"])))
+            for exit_order in payload.get("exit_orders", [])
+        ],
+        status=str(payload.get("status") or "accepted"),
+    )

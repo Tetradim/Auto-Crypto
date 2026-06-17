@@ -42,8 +42,11 @@ def create_app(
     require_approval: bool = False,
 ) -> FastAPI:
     app = FastAPI(title="Auto-Crypto", version="0.1.0")
+    paper_exchange = exchange
+    if paper_exchange is None:
+        paper_exchange = PaperExchange.from_order_history(repository.list_orders()) if repository else PaperExchange()
     engine = TradingEngine(
-        exchange=exchange or PaperExchange(),
+        exchange=paper_exchange,
         risk_config=risk_config or RiskConfig(),
         account_state=account_state or AccountState(),
     )

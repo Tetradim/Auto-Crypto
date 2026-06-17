@@ -56,3 +56,30 @@ def test_app_rejects_duplicate_signal_after_restart_with_same_repository(tmp_pat
         "order.accepted",
         "signal.duplicate",
     ]
+
+
+def test_app_rehydrates_paper_positions_and_brackets_from_order_history(tmp_path):
+    db_path = tmp_path / "rehydrate.sqlite3"
+    first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "rehydrate-entry",
+            "symbol": "SOLUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "2",
+            "take_profit_pct": "5",
+        },
+    )
+
+    second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+
+    assert second_client.get("/positions").json()["positions"][0]["quantity"] == "1.00000000"
+    triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "105"})
+
+    assert triggered.json()["triggered"] == [
+        {"symbol": "SOL/USDT", "kind": "take_profit", "price": "105.00000000"}
+    ]
+    assert SQLiteRepository(db_path).list_orders()[-1]["side"] == "sell"
