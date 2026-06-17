@@ -118,6 +118,10 @@ def create_app(
             return {"orders": repository.list_orders()}
         return {"orders": [order.to_dict() for order in engine.exchange.orders]}
 
+    @app.get("/positions")
+    def positions() -> dict[str, Any]:
+        return {"positions": engine.exchange.list_positions()}
+
     @app.get("/signals")
     def signals() -> dict[str, Any]:
         return {"signals": repository.list_signals() if repository else []}

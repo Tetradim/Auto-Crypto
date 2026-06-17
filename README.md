@@ -14,6 +14,7 @@ Auto-Crypto is a paper-first crypto trading automation service for Discord and w
 - Optional HMAC-signed webhook verification through `AUTO_CRYPTO_WEBHOOK_SECRET`
 - SQLite repository for signal, paper-order, and audit history
 - Operator halt/resume controls that block new orders and record audit events
+- Paper portfolio accounting with weighted average entry and realized PnL
 
 Live trading is intentionally not enabled by default. Do not grant withdrawal permissions to exchange API keys.
 
@@ -57,6 +58,7 @@ When a signed request is accepted, the same timestamp/body pair is rejected on r
 
 - `GET /signals`: accepted normalized signals
 - `GET /orders`: accepted paper orders
+- `GET /positions`: current paper portfolio positions
 - `GET /audit`: signal and order lifecycle audit events
 
 ## Operator Controls

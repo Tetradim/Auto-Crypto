@@ -16,6 +16,39 @@ class ExitOrder:
     trigger_price: Decimal
 
 
+@dataclass
+class PaperPosition:
+    symbol: str
+    quantity: Decimal = Decimal("0")
+    avg_entry: Decimal = Decimal("0")
+    realized_pnl: Decimal = Decimal("0")
+
+    def buy(self, quantity: Decimal, price: Decimal) -> None:
+        total_quantity = self.quantity + quantity
+        if total_quantity <= 0:
+            self.quantity = Decimal("0")
+            self.avg_entry = Decimal("0")
+            return
+        self.avg_entry = ((self.avg_entry * self.quantity) + (price * quantity)) / total_quantity
+        self.quantity = total_quantity
+
+    def sell(self, quantity: Decimal, price: Decimal) -> None:
+        sell_quantity = min(quantity, self.quantity)
+        self.realized_pnl += (price - self.avg_entry) * sell_quantity
+        self.quantity -= sell_quantity
+        if self.quantity <= 0:
+            self.quantity = Decimal("0")
+            self.avg_entry = Decimal("0")
+
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol,
+            "quantity": _fixed8(self.quantity),
+            "avg_entry": _fixed8(self.avg_entry),
+            "realized_pnl": _fixed8(self.realized_pnl),
+        }
+
+
 @dataclass(frozen=True)
 class PaperOrder:
     order_id: str
@@ -74,10 +107,13 @@ class PaperExchange:
 
     def __init__(self) -> None:
         self.orders: list[PaperOrder] = []
+        self.positions: dict[str, PaperPosition] = {}
 
     def submit(self, signal: CryptoSignal, decision: RiskDecision) -> PaperOrder:
         if decision.order_notional is None:
             raise ValueError("approved order requires notional")
+        if signal.price is not None:
+            self._apply_fill(signal, decision.order_notional)
         order = PaperOrder(
             order_id=f"paper-{signal.signal_id}",
             signal_id=signal.signal_id,
@@ -91,6 +127,23 @@ class PaperExchange:
         )
         self.orders.append(order)
         return order
+
+    def list_positions(self) -> list[dict]:
+        return [
+            position.to_dict()
+            for position in self.positions.values()
+            if position.quantity > 0 or position.realized_pnl != 0
+        ]
+
+    def _apply_fill(self, signal: CryptoSignal, notional: Decimal) -> None:
+        if signal.price is None:
+            return
+        quantity = signal.base_amount if signal.base_amount is not None else notional / signal.price
+        position = self.positions.setdefault(signal.symbol, PaperPosition(symbol=signal.symbol))
+        if signal.side == "buy":
+            position.buy(quantity, signal.price)
+        elif signal.side == "sell":
+            position.sell(quantity, signal.price)
 
 
 def build_exit_orders(signal: CryptoSignal) -> list[ExitOrder]:
@@ -110,3 +163,6 @@ def build_exit_orders(signal: CryptoSignal) -> list[ExitOrder]:
 def _money(value: Decimal) -> Decimal:
     return value.quantize(MONEY, rounding=ROUND_HALF_UP)
 
+
+def _fixed8(value: Decimal) -> str:
+    return f"{value.quantize(Decimal('0.00000001'), rounding=ROUND_HALF_UP):f}"
