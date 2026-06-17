@@ -25,6 +25,18 @@ Live trading is intentionally not enabled by default. Do not grant withdrawal pe
 
 ## Quick Start
 
+On Windows, double-click `Launch-Auto-Crypto.bat` from the repo root. The launcher creates `.venv` if needed, installs Auto-Crypto, starts the API with SQLite persistence, and opens the API docs.
+
+Useful launcher switches:
+
+```powershell
+.\Launch-Auto-Crypto.bat -Port 8000 -InstallDeps
+.\Launch-Auto-Crypto.bat -ExchangeDeps
+.\Launch-Auto-Crypto.bat -StartDiscord
+```
+
+`-StartDiscord` requires `DISCORD_BOT_TOKEN` in the environment. Without it, the launcher starts the FastAPI webhook/API bot only.
+
 ```powershell
 python -m venv .venv
 .\\.venv\\Scripts\\Activate.ps1
