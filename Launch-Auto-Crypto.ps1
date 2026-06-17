@@ -2,7 +2,8 @@
 # Runs the local source checkout with persistent paper-mode SQLite storage.
 
 param(
-    [int]$Port = 8000,
+    [int]$Port = 8004,
+    [int]$FrontendPort = 3004,
     [string]$HostName = "127.0.0.1",
     [string]$DbPath = "",
     [switch]$NoBrowser,
@@ -219,7 +220,7 @@ function Register-LauncherShutdownHandlers {
 
 if ($SmokeTest) {
     Write-Status "Running launcher smoke test"
-    $quoted = Join-ProcessArguments -Arguments @("-m", "uvicorn", "autocrypto.app:create_app_from_env", "--factory", "--port", "8000")
+    $quoted = Join-ProcessArguments -Arguments @("-m", "uvicorn", "autocrypto.app:create_app_from_env", "--factory", "--port", "8004")
     if (-not $quoted.Contains("autocrypto.app:create_app_from_env")) {
         throw "Argument joining smoke test failed."
     }
@@ -313,6 +314,7 @@ try {
     Write-Host ""
     Write-Host "Ready: $docsUrl" -ForegroundColor Green
     Write-Host "Health: $healthUrl" -ForegroundColor Gray
+    Write-Host "Frontend port reserved: $FrontendPort" -ForegroundColor Gray
     Write-Host "Database: $DbPath" -ForegroundColor Gray
     if (-not $StartDiscord) {
         Write-Host "Discord bot: pass -StartDiscord after setting DISCORD_BOT_TOKEN." -ForegroundColor Gray

@@ -30,12 +30,13 @@ On Windows, double-click `Launch-Auto-Crypto.bat` from the repo root. The launch
 Useful launcher switches:
 
 ```powershell
-.\Launch-Auto-Crypto.bat -Port 8000 -InstallDeps
+.\Launch-Auto-Crypto.bat -Port 8004 -InstallDeps
 .\Launch-Auto-Crypto.bat -ExchangeDeps
 .\Launch-Auto-Crypto.bat -StartDiscord
 ```
 
 `-StartDiscord` requires `DISCORD_BOT_TOKEN` in the environment. Without it, the launcher starts the FastAPI webhook/API bot only.
+The workstation suite reserves frontend port `3004` for Auto-Crypto, but this checkout currently exposes API docs from the backend on port `8004`.
 
 ```powershell
 python -m venv .venv
@@ -59,7 +60,7 @@ python -m pip install -e ".[exchange]"
 Send a test signal:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/webhooks/tradingview -ContentType "application/json" -Body '{
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/webhooks/tradingview -ContentType "application/json" -Body '{
   "symbol": "BTCUSDT",
   "side": "buy",
   "quote_amount": "25",
@@ -105,7 +106,7 @@ Use `POST /market/price` to feed paper-mode market prices into the bracket engin
 Multiple entries on the same symbol keep independent paper lots, so one take-profit or stop-loss trigger closes only the matching lot instead of flattening the whole symbol.
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/market/price -ContentType "application/json" -Body '{
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/market/price -ContentType "application/json" -Body '{
   "symbol": "BTCUSDT",
   "price": "51500"
 }'
