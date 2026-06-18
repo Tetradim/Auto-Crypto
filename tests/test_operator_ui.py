@@ -8,6 +8,7 @@ def test_operator_ui_is_served_from_backend():
     client = TestClient(create_app())
 
     ui = client.get("/ui")
+    formatters = client.get("/ui/static/formatters.js")
     script = client.get("/ui/static/app.js")
 
     assert ui.status_code == 200
@@ -37,7 +38,15 @@ def test_operator_ui_is_served_from_backend():
     assert "copyTicketJsonButton" in ui.text
     assert "copyCapabilityButton" in ui.text
     assert "copyBitunixButton" in ui.text
+    assert '<script src="/ui/static/formatters.js"></script>' in ui.text
+    assert ui.text.index("/ui/static/formatters.js") < ui.text.index("/ui/static/app.js")
+    assert formatters.status_code == 200
+    assert "window.AutoCryptoFormatters" in formatters.text
+    assert "escapeHtml" in formatters.text
+    assert "prettySymbol" in formatters.text
+    assert "formatAuditTime" in formatters.text
     assert script.status_code == 200
+    assert "AutoCryptoFormatters" in script.text
     assert "submitSignal" in script.text
     assert "previewSignal" in script.text
     assert "orderDeskRow" in script.text
