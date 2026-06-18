@@ -385,6 +385,7 @@ function renderRiskPreview() {
   const preview = appState.riskPreview;
   if (!preview) {
     $("#riskPreview").innerHTML = `<div class="empty-state">Preview risk to see server-side checks before submission.</div>`;
+    renderTicketPreview();
     return;
   }
 
@@ -424,6 +425,43 @@ function renderRiskPreview() {
     </div>
     <p class="preview-note">${escapeHtml(nextStep)}</p>
   `;
+  renderTicketPreview();
+}
+
+function renderTicketPreview() {
+  const container = $("#ticketPreviewSummary");
+  if (!container) return;
+  const preview = appState.riskPreview;
+  if (!preview) {
+    container.innerHTML = `
+      <div class="ticket-preview-grid">
+        <span>Risk<strong>not checked</strong></span>
+        <span>Next<strong>preview</strong></span>
+        <span>Notional<strong>-</strong></span>
+      </div>
+      <p>Load or preview a ticket to see server-side checks.</p>
+    `;
+    return;
+  }
+
+  const risk = preview.risk || {};
+  const execution = preview.execution || {};
+  const reasons = risk.reason_codes || [];
+  const status = String(execution.next_status || "unknown").replaceAll("_", " ");
+  const approved = Boolean(risk.approved);
+  const statusClass = execution.next_status === "halted" || !approved ? "down" : execution.next_status === "approval_required" ? "amber" : "up";
+  const orderText = risk.order_notional ? money(risk.order_notional) : "unknown";
+  const reasonText = reasons.length
+    ? reasons.map((reason) => String(reason).replaceAll("_", " ")).join(", ")
+    : "No risk blockers";
+  container.innerHTML = `
+    <div class="ticket-preview-grid">
+      <span>Risk<strong class="${approved ? "up" : "down"}">${approved ? "approved" : "blocked"}</strong></span>
+      <span>Next<strong class="${statusClass}">${escapeHtml(status)}</strong></span>
+      <span>Notional<strong>${escapeHtml(orderText)}</strong></span>
+    </div>
+    <p>${escapeHtml(reasonText)}</p>
+  `;
 }
 
 function renderTradingDesk() {
@@ -432,6 +470,7 @@ function renderTradingDesk() {
   $("#markPrice").value = String(mark.toFixed(mark > 1000 ? 0 : 2));
   renderOrderBook(mark);
   renderDeskTable();
+  renderTicketPreview();
 }
 
 function renderOrderBook(mid) {
@@ -761,14 +800,16 @@ async function submitSignal(message) {
   await loadState(false);
 }
 
-async function previewTicket() {
+async function previewTicket(options = {}) {
   const payload = await api("/signals/preview", { method: "POST", body: ticketPayload() });
   appState.parsedSignal = payload.signal;
   appState.riskPreview = payload;
   appState.lastPayload = payload;
   renderSignals();
-  activateView("signals");
-  setStatus(`Ticket risk preview: ${payload.execution.next_status}.`, payload.risk.approved ? "ok" : "warn");
+  renderTicketPreview();
+  if (options.activateSignals !== false) activateView("signals");
+  const label = options.label || "Ticket";
+  setStatus(`${label} risk preview: ${payload.execution.next_status}.`, payload.risk.approved ? "ok" : "warn");
   return payload;
 }
 
@@ -885,7 +926,7 @@ async function loadBitunixAccount() {
   setStatus("Bitunix futures account check completed.", "ok");
 }
 
-function copyStrategy(strategyId) {
+async function copyStrategy(strategyId) {
   const strategy = strategies.find((item) => item.id === strategyId);
   if (!strategy) return;
   setTicketStrategy(strategy.name);
@@ -900,7 +941,10 @@ function copyStrategy(strategyId) {
   appState.selectedPair = strategy.pair;
   renderStrategies();
   activateView("trading");
-  setStatus(`${strategy.name} loaded into the trading desk.`, "ok");
+  $("#ticketStatus").textContent = "previewing";
+  const preview = await previewTicket({ activateSignals: false, label: strategy.name });
+  const status = String(preview.execution?.next_status || "unknown").replaceAll("_", " ");
+  $("#ticketStatus").textContent = `risk: ${status}`;
 }
 
 function runBacktest(strategyId) {
@@ -1351,7 +1395,10 @@ function bindEvents() {
     }
     if (action === "exchange-cap") inspectExchange(target.dataset.exchangeId);
     if (action === "platform-integration") inspectPlatform(target.dataset.exchangeId);
-    if (action === "copy-strategy") copyStrategy(target.dataset.strategyId);
+    if (action === "copy-strategy") copyStrategy(target.dataset.strategyId).catch((error) => {
+      $("#ticketStatus").textContent = "preview failed";
+      setStatus(`Strategy load failed: ${error.message}`, "error");
+    });
     if (action === "backtest-strategy") runBacktest(target.dataset.strategyId);
     if (action === "toggle-strategy-pin") toggleStrategyPin(target.dataset.strategyId);
     if (action === "copy-json") copyText(target.dataset.json).catch((error) => setStatus(error.message, "error"));
