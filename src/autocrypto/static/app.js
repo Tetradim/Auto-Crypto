@@ -66,6 +66,7 @@ const appState = {
   lastPayload: null,
   backtests: {},
   selectedExchange: null,
+  markPrices: {},
 };
 
 function escapeHtml(value) {
@@ -203,7 +204,7 @@ function renderMarketStrip() {
   }
   $("#marketStrip").innerHTML = defaultMarkets
     .map((market) => {
-      const price = latestBySymbol.get(market.symbol) ?? market.price;
+      const price = appState.markPrices[market.symbol] ?? latestBySymbol.get(market.symbol) ?? market.price;
       const suffix = market.suffix || "";
       const priceText = market.suffix ? `${Number(price).toFixed(2)}${suffix}` : money(price);
       const cls = market.change > 0 ? "up" : market.change < 0 ? "down" : "flat";
@@ -434,12 +435,13 @@ function renderDeskTable() {
     return;
   }
 
-  $("#deskTableHead").innerHTML = `<tr><th>Pair</th><th>Quantity</th><th>Average Entry</th><th>Realized P&L</th><th>Mark</th><th>Action</th></tr>`;
+  $("#deskTableHead").innerHTML = `<tr><th>Pair</th><th>Quantity</th><th>Average Entry</th><th>Realized P&L</th><th>Unrealized</th><th>Mark</th><th>Action</th></tr>`;
   const positions = appState.data?.positions || [];
   $("#deskTableBody").innerHTML =
     positions.length > 0
       ? positions.map((position) => {
         const mark = currentMarkPrice(compactSymbol(position.symbol));
+        const unrealized = Number(position.quantity || 0) * (mark - Number(position.avg_entry || 0));
         const compact = compactSymbol(position.symbol);
         return `
           <tr>
@@ -447,6 +449,7 @@ function renderDeskTable() {
             <td>${escapeHtml(position.quantity)}</td>
             <td>${money(position.avg_entry)}</td>
             <td class="${Number(position.realized_pnl) >= 0 ? "up" : "down"}">${money(position.realized_pnl)}</td>
+            <td class="${unrealized >= 0 ? "up" : "down"}">${money(unrealized)}</td>
             <td>${money(mark)}</td>
             <td>
               <div class="row-actions">
@@ -457,7 +460,7 @@ function renderDeskTable() {
           </tr>
         `;
       }).join("")
-      : `<tr><td colspan="6">No open positions. Submit a paper buy with a price to create one.</td></tr>`;
+      : `<tr><td colspan="7">No open positions. Submit a paper buy with a price to create one.</td></tr>`;
 }
 
 function renderStrategies() {
@@ -614,6 +617,7 @@ function renderAudit() {
 
 function currentMarkPrice(symbol) {
   const pretty = prettySymbol(symbol);
+  if (appState.markPrices[pretty] !== undefined) return Number(appState.markPrices[pretty]);
   const fromOrder = [...(appState.data?.orders || [])].reverse().find((order) => order.symbol === pretty && order.price);
   if (fromOrder) return Number(fromOrder.price);
   const market = defaultMarkets.find((item) => item.compact === compactSymbol(symbol));
@@ -708,6 +712,7 @@ async function previewTicket() {
 
 async function submitTicket() {
   const payload = ticketPayload();
+  appState.selectedPair = compactSymbol(payload.symbol);
   const result = await api("/signals/submit", { method: "POST", body: payload });
   appState.lastPayload = result;
   setStatus(`Ticket submitted as ${payload.strategy_id}: ${result.status || "submitted"}.`, result.status === "rejected" ? "warn" : "ok");
@@ -751,6 +756,7 @@ async function updateMarkPrice(symbol, price) {
     body: { symbol, price },
   });
   appState.lastPayload = result;
+  appState.markPrices[result.symbol] = Number(result.price);
   setStatus(`Updated ${result.symbol} to ${result.price}; triggered ${result.triggered.length} exits.`, result.triggered.length ? "warn" : "ok");
   await loadState(false);
 }
@@ -1126,7 +1132,10 @@ function bindEvents() {
   $("#ticketStrategy").addEventListener("change", () => {
     setStatus(`Ticket strategy set to ${$("#ticketStrategy").value}.`, "ok");
   });
-  $("#updatePriceButton").addEventListener("click", () => updateMarkPrice(appState.selectedPair, $("#markPrice").value).catch((error) => setStatus(error.message, "error")));
+  $("#updatePriceButton").addEventListener("click", () => {
+    appState.selectedPair = compactSymbol($("#ticketSymbol").value || appState.selectedPair);
+    updateMarkPrice(appState.selectedPair, $("#markPrice").value).catch((error) => setStatus(error.message, "error"));
+  });
   $("#exportStateButton").addEventListener("click", exportState);
   $("#refreshExchangesButton").addEventListener("click", async () => {
     await loadExchanges(true);
