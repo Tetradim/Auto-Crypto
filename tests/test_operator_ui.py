@@ -73,6 +73,9 @@ def test_operator_ui_is_served_from_backend():
     assert "orderDeskRow" in script.text
     assert "inspect-order" in script.text
     assert "data-json" in script.text
+    assert "signalHistoryRow" in script.text
+    assert "preview-signal-ticket" in script.text
+    assert "Copy JSON" in script.text
     assert "closePosition" in script.text
     assert "data-close-label" in script.text
     assert "Close 25%" in script.text

@@ -371,6 +371,7 @@ function renderSignalHistory() {
 }
 
 function signalHistoryRow(signal) {
+  const payload = escapeHtml(JSON.stringify(signal));
   const size = signal.quote_amount
     ? money(signal.quote_amount)
     : signal.base_amount
@@ -383,7 +384,13 @@ function signalHistoryRow(signal) {
       <td>${escapeHtml(size)}</td>
       <td>${signal.price ? money(signal.price) : "market"}</td>
       <td>${escapeHtml(signal.strategy_id || "manual")}</td>
-      <td><button type="button" data-action="load-signal-ticket" data-signal-id="${escapeHtml(signal.signal_id)}">Load</button></td>
+      <td>
+        <div class="row-actions">
+          <button type="button" data-action="load-signal-ticket" data-signal-id="${escapeHtml(signal.signal_id)}">Load</button>
+          <button type="button" data-action="preview-signal-ticket" data-signal-id="${escapeHtml(signal.signal_id)}">Preview</button>
+          <button type="button" data-action="copy-json" data-json="${payload}">Copy JSON</button>
+        </div>
+      </td>
     </tr>
   `;
 }
@@ -1156,6 +1163,15 @@ function loadSignalTicket(signalId) {
   setStatus(`Loaded ${prettySymbol(signal.symbol)} signal into the ticket.`, "ok");
 }
 
+async function previewSignalTicket(signalId) {
+  loadSignalTicket(signalId);
+  const signal = (appState.data?.signals || []).find((item) => item.signal_id === signalId);
+  const label = signal?.strategy_id || signalId;
+  const preview = await previewTicket({ activateSignals: false, label });
+  const status = String(preview.execution?.next_status || "unknown").replaceAll("_", " ");
+  $("#ticketStatus").textContent = `risk: ${status}`;
+}
+
 function activateView(viewName) {
   appState.activeView = viewName;
   $$(".view").forEach((view) => view.classList.toggle("is-active", view.dataset.view === viewName));
@@ -1551,6 +1567,7 @@ function bindEvents() {
     if (action === "reject") rejectSignal(target.dataset.signalId).catch((error) => setStatus(error.message, "error"));
     if (action === "inspect-order") inspectOrder(target.dataset.orderId);
     if (action === "load-signal-ticket") loadSignalTicket(target.dataset.signalId);
+    if (action === "preview-signal-ticket") previewSignalTicket(target.dataset.signalId).catch((error) => setStatus(error.message, "error"));
     if (action === "load-position-price") {
       appState.selectedPair = target.dataset.symbol;
       $("#ticketSymbol").value = target.dataset.symbol;
