@@ -62,6 +62,7 @@ const appState = {
   strategyFilter: "all",
   equityRange: "1d",
   parsedSignal: null,
+  riskPreview: null,
   lastPayload: null,
   backtests: {},
   selectedExchange: null,
@@ -308,7 +309,53 @@ function renderSignals() {
       .map(([label, value]) => `<span>${escapeHtml(label)}<strong>${escapeHtml(value)}</strong></span>`)
       .join("");
   }
+  renderRiskPreview();
   $("#payloadPreview").textContent = JSON.stringify(appState.lastPayload || appState.parsedSignal || {}, null, 2);
+}
+
+function renderRiskPreview() {
+  const preview = appState.riskPreview;
+  if (!preview) {
+    $("#riskPreview").innerHTML = `<div class="empty-state">Preview risk to see server-side checks before submission.</div>`;
+    return;
+  }
+
+  const risk = preview.risk || {};
+  const execution = preview.execution || {};
+  const reasons = risk.reason_codes || [];
+  const status = String(execution.next_status || "unknown").replaceAll("_", " ");
+  const approved = Boolean(risk.approved);
+  const statusClass = execution.next_status === "halted" || !approved ? "down" : execution.next_status === "approval_required" ? "amber" : "up";
+  const orderText = risk.order_notional ? money(risk.order_notional) : "unknown";
+  const nextStep = execution.would_place_order
+    ? "Paper order would be placed"
+    : execution.next_status === "approval_required"
+      ? "Would queue for operator approval"
+      : execution.next_status === "halted"
+        ? `Blocked by halt${execution.halt_reason ? `: ${execution.halt_reason}` : ""}`
+        : approved
+          ? "Ready after operator action"
+          : "Submission would be rejected";
+
+  $("#riskPreview").innerHTML = `
+    <div class="preview-head">
+      <span>Risk Preview</span>
+      <strong class="${statusClass}">${escapeHtml(status)}</strong>
+    </div>
+    <div class="preview-metrics">
+      <span>Risk<strong class="${approved ? "up" : "down"}">${approved ? "approved" : "blocked"}</strong></span>
+      <span>Notional<strong>${escapeHtml(orderText)}</strong></span>
+      <span>Open<strong>${money(preview.account?.open_notional || 0)}</strong></span>
+    </div>
+    <div class="reason-chips">
+      ${
+        reasons.length > 0
+          ? reasons.map((reason) => `<span>${escapeHtml(String(reason).replaceAll("_", " "))}</span>`).join("")
+          : `<span class="clear">No risk blockers</span>`
+      }
+    </div>
+    <p class="preview-note">${escapeHtml(nextStep)}</p>
+  `;
 }
 
 function renderTradingDesk() {
@@ -512,6 +559,18 @@ function ticketToText() {
   return `${side} ${symbol} $${amount} @ ${price}${stopPart}${tpPart}`;
 }
 
+function ticketPayload() {
+  return {
+    symbol: $("#ticketSymbol").value,
+    side: $("#ticketSide").value.toLowerCase(),
+    quote_amount: $("#ticketAmount").value,
+    price: $("#ticketPrice").value,
+    stop_loss_pct: $("#ticketStop").value || null,
+    take_profit_pct: $("#ticketTakeProfit").value || null,
+    strategy_id: $("#ticketStrategy").value,
+  };
+}
+
 async function parseSignal() {
   const message = $("#signalText").value;
   const payload = await api("/signals/parse-text", { method: "POST", body: { message } });
@@ -522,6 +581,16 @@ async function parseSignal() {
   return payload.signal;
 }
 
+async function previewSignal(message) {
+  const payload = await api("/signals/preview-text", { method: "POST", body: { message } });
+  appState.parsedSignal = payload.signal;
+  appState.riskPreview = payload;
+  appState.lastPayload = payload;
+  renderSignals();
+  setStatus(`Risk preview: ${payload.execution.next_status}.`, payload.risk.approved ? "ok" : "warn");
+  return payload;
+}
+
 async function submitSignal(message) {
   const payload = await api("/signals/submit-text", { method: "POST", body: { message } });
   appState.lastPayload = payload;
@@ -529,16 +598,19 @@ async function submitSignal(message) {
   await loadState();
 }
 
+async function previewTicket() {
+  const payload = await api("/signals/preview", { method: "POST", body: ticketPayload() });
+  appState.parsedSignal = payload.signal;
+  appState.riskPreview = payload;
+  appState.lastPayload = payload;
+  renderSignals();
+  activateView("signals");
+  setStatus(`Ticket risk preview: ${payload.execution.next_status}.`, payload.risk.approved ? "ok" : "warn");
+  return payload;
+}
+
 async function submitTicket() {
-  const payload = {
-    symbol: $("#ticketSymbol").value,
-    side: $("#ticketSide").value.toLowerCase(),
-    quote_amount: $("#ticketAmount").value,
-    price: $("#ticketPrice").value,
-    stop_loss_pct: $("#ticketStop").value || null,
-    take_profit_pct: $("#ticketTakeProfit").value || null,
-    strategy_id: $("#ticketStrategy").value,
-  };
+  const payload = ticketPayload();
   const result = await api("/signals/submit", { method: "POST", body: payload });
   appState.lastPayload = result;
   setStatus(`Ticket submitted as ${payload.strategy_id}: ${result.status || "submitted"}.`, result.status === "rejected" ? "warn" : "ok");
@@ -905,6 +977,7 @@ function bindEvents() {
     setStatus("Sample signal loaded.", "ok");
   });
   $("#parseSignalButton").addEventListener("click", () => parseSignal().catch((error) => setStatus(error.message, "error")));
+  $("#previewSignalButton").addEventListener("click", () => previewSignal($("#signalText").value).catch((error) => setStatus(error.message, "error")));
   $("#submitSignalButton").addEventListener("click", () => submitSignal($("#signalText").value).catch((error) => setStatus(error.message, "error")));
   $("#copyPayloadButton").addEventListener("click", () => copyText($("#payloadPreview").textContent).catch((error) => setStatus(error.message, "error")));
   $("#buildTicketButton").addEventListener("click", () => {
@@ -912,6 +985,7 @@ function bindEvents() {
     activateView("signals");
     setStatus("Ticket converted into Signal Forge text.", "ok");
   });
+  $("#previewTicketButton").addEventListener("click", () => previewTicket().catch((error) => setStatus(error.message, "error")));
   $("#submitTicketButton").addEventListener("click", () => submitTicket().catch((error) => setStatus(error.message, "error")));
   $("#signalChannel").addEventListener("change", () => {
     appState.lastPayload = { channel: $("#signalChannel").value, message: $("#signalText").value };

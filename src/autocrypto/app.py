@@ -31,14 +31,14 @@ from .exchanges.platform_registry import get_platform, platform_rows
 from .execution import PaperExchange
 from .intake import SignalIntakeService
 from .repository import SQLiteRepository
-from .risk import AccountState, RiskConfig
+from .risk import AccountState, RiskConfig, RiskDecision, evaluate_signal
 from .security import (
     InMemoryWebhookReplayStore,
     WebhookReplayError,
     WebhookSignatureError,
     verify_webhook_signature,
 )
-from .signals import SignalValidationError, normalize_signal, normalize_symbol
+from .signals import CryptoSignal, SignalValidationError, normalize_signal, normalize_symbol
 from .text_signals import parse_text_signal
 
 
@@ -320,18 +320,16 @@ def create_app(
             signal = parse_text_signal(str(payload.get("message") or ""), source="api")
         except SignalValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "signal": {
-                "signal_id": signal.signal_id,
-                "symbol": signal.symbol,
-                "side": signal.side,
-                "quote_amount": str(signal.quote_amount) if signal.quote_amount is not None else None,
-                "base_amount": str(signal.base_amount) if signal.base_amount is not None else None,
-                "price": str(signal.price) if signal.price is not None else None,
-                "stop_loss_pct": str(signal.stop_loss_pct) if signal.stop_loss_pct is not None else None,
-                "take_profit_pct": str(signal.take_profit_pct) if signal.take_profit_pct is not None else None,
-            }
-        }
+        return {"signal": _signal_to_dict(signal)}
+
+    @app.post("/signals/preview-text")
+    async def preview_text(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            signal = parse_text_signal(str(payload.get("message") or ""), source="operator-preview")
+        except SignalValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _signal_preview(signal, engine, require_approval=require_approval)
 
     @app.post("/signals/submit-text")
     async def submit_text(request: Request) -> dict[str, Any]:
@@ -350,6 +348,15 @@ def create_app(
         except SignalValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return intake.handle(signal)
+
+    @app.post("/signals/preview")
+    async def preview_signal(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            signal = normalize_signal(payload, source="operator-preview")
+        except SignalValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _signal_preview(signal, engine, require_approval=require_approval)
 
     @app.get("/audit")
     def audit() -> dict[str, Any]:
@@ -438,6 +445,63 @@ def _account_state_to_dict(account_state: AccountState) -> dict[str, Any]:
         "equity": str(account_state.equity),
         "daily_pnl": str(account_state.daily_pnl),
         "open_notional": str(account_state.open_notional),
+    }
+
+
+def _signal_to_dict(signal: CryptoSignal) -> dict[str, Any]:
+    return {
+        "signal_id": signal.signal_id,
+        "source": signal.source,
+        "symbol": signal.symbol,
+        "side": signal.side,
+        "exchange": signal.exchange,
+        "market_type": signal.market_type,
+        "quote_amount": str(signal.quote_amount) if signal.quote_amount is not None else None,
+        "base_amount": str(signal.base_amount) if signal.base_amount is not None else None,
+        "price": str(signal.price) if signal.price is not None else None,
+        "stop_loss_pct": str(signal.stop_loss_pct) if signal.stop_loss_pct is not None else None,
+        "take_profit_pct": str(signal.take_profit_pct) if signal.take_profit_pct is not None else None,
+        "leverage": str(signal.leverage),
+        "max_slippage_bps": signal.max_slippage_bps,
+        "strategy_id": signal.strategy_id,
+    }
+
+
+def _risk_decision_to_dict(decision: RiskDecision) -> dict[str, Any]:
+    return {
+        "approved": decision.approved,
+        "reason_codes": decision.reason_codes,
+        "order_notional": str(decision.order_notional) if decision.order_notional is not None else None,
+    }
+
+
+def _signal_preview(
+    signal: CryptoSignal,
+    engine: TradingEngine,
+    *,
+    require_approval: bool,
+) -> dict[str, Any]:
+    decision = evaluate_signal(signal, engine.risk_config, engine.account_state)
+    if engine.halted:
+        next_status = "halted"
+    elif require_approval:
+        next_status = "approval_required"
+    elif decision.approved:
+        next_status = "accepted"
+    else:
+        next_status = "rejected"
+
+    return {
+        "signal": _signal_to_dict(signal),
+        "risk": _risk_decision_to_dict(decision),
+        "execution": {
+            "next_status": next_status,
+            "would_place_order": decision.approved and not engine.halted and not require_approval,
+            "halted": engine.halted,
+            "halt_reason": engine.halt_reason,
+            "approval_required": require_approval,
+        },
+        "account": _account_state_to_dict(engine.account_state),
     }
 
 

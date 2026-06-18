@@ -730,7 +730,14 @@ pre {
 .builder-actions,
 .ticket-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+}
+
+.builder-actions {
+  grid-template-columns: 0.75fr 1.05fr 1.45fr;
+}
+
+.ticket-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .payload-view {
@@ -753,6 +760,82 @@ pre {
 .parsed-grid strong {
   display: block;
   color: var(--text);
+}
+
+.risk-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b1018;
+  padding: 12px;
+}
+
+.preview-head span,
+.preview-note {
+  color: var(--muted);
+}
+
+.preview-head strong {
+  text-transform: uppercase;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.84rem;
+}
+
+.preview-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.preview-metrics span {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-3);
+  color: var(--muted);
+  padding: 10px;
+}
+
+.preview-metrics strong {
+  display: block;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reason-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.reason-chips span {
+  border: 1px solid rgba(255, 84, 112, 0.48);
+  border-radius: 999px;
+  background: rgba(255, 84, 112, 0.12);
+  color: #ffd7de;
+  padding: 6px 9px;
+  font-size: 0.82rem;
+}
+
+.reason-chips .clear {
+  border-color: rgba(40, 216, 161, 0.42);
+  background: rgba(40, 216, 161, 0.1);
+  color: var(--green);
+}
+
+.preview-note {
+  margin: 0;
+  line-height: 1.35;
 }
 
 .texture {

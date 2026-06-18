@@ -155,9 +155,11 @@
             </label>
             <div class="builder-actions">
               <button type="button" id="parseSignalButton">Parse</button>
+              <button type="button" id="previewSignalButton">Preview Risk</button>
               <button type="button" id="submitSignalButton" class="primary">Submit Paper Signal</button>
             </div>
             <div class="parsed-grid" id="parsedSignal"></div>
+            <div class="risk-preview" id="riskPreview" aria-label="Risk Preview"></div>
           </section>
 
           <section class="panel span-2 texture blue">
@@ -240,6 +242,7 @@
             <label>Take profit % <input id="ticketTakeProfit" value="4.5" inputmode="decimal" /></label>
             <div class="ticket-actions">
               <button type="button" id="buildTicketButton">Build Alert</button>
+              <button type="button" id="previewTicketButton">Preview Risk</button>
               <button class="primary" type="button" id="submitTicketButton">Submit</button>
             </div>
           </section>

@@ -14,8 +14,10 @@ def test_operator_ui_is_served_from_backend():
     assert "Auto-Crypto Operator" in ui.text
     assert "Trading Platforms" in ui.text
     assert "Bitunix Futures" in ui.text
+    assert "Risk Preview" in ui.text
     assert script.status_code == 200
     assert "submitSignal" in script.text
+    assert "previewSignal" in script.text
     assert "loadPlatforms" in script.text
     assert "loadBitunixTickers" in script.text
 
@@ -68,6 +70,56 @@ def test_operator_text_submit_can_queue_for_approval(tmp_path):
     assert response.status_code == 200
     assert response.json()["status"] == "approval_required"
     assert client.get("/ui/state").json()["approvals"][0]["symbol"] == "ETH/USDT"
+
+
+def test_operator_text_preview_reports_risk_without_ordering(tmp_path):
+    repo = SQLiteRepository(tmp_path / "ui_preview.sqlite3")
+    client = TestClient(create_app(repository=repo))
+
+    response = client.post(
+        "/signals/preview-text",
+        json={"message": "BUY BTCUSDT $75 @ 50000"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["signal"]["symbol"] == "BTC/USDT"
+    assert body["risk"] == {
+        "approved": False,
+        "reason_codes": ["stop_loss_required"],
+        "order_notional": "75",
+    }
+    assert body["execution"]["next_status"] == "rejected"
+    assert body["execution"]["would_place_order"] is False
+    assert client.get("/orders").json()["orders"] == []
+    assert client.get("/audit").json()["events"] == []
+
+
+def test_operator_structured_preview_reflects_approval_mode(tmp_path):
+    repo = SQLiteRepository(tmp_path / "ui_json_preview.sqlite3")
+    client = TestClient(create_app(repository=repo, require_approval=True))
+
+    response = client.post(
+        "/signals/preview",
+        json={
+            "symbol": "SOLUSDT",
+            "side": "buy",
+            "quote_amount": "55",
+            "price": "150",
+            "stop_loss_pct": "3",
+            "take_profit_pct": "6",
+            "strategy_id": "DCA Ladder",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk"]["approved"] is True
+    assert body["risk"]["reason_codes"] == []
+    assert body["risk"]["order_notional"] == "55"
+    assert body["execution"]["next_status"] == "approval_required"
+    assert body["execution"]["would_place_order"] is False
+    assert client.get("/approvals").json()["pending"] == []
 
 
 def test_operator_json_submit_preserves_strategy_metadata(tmp_path):
