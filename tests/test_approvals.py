@@ -109,3 +109,54 @@ def test_rejected_pending_approval_is_removed_from_repository(tmp_path):
 
     assert rejected.status_code == 200
     assert SQLiteRepository(db_path).list_pending_approvals() == []
+
+
+def test_approval_mode_rejects_risk_invalid_signal_without_queueing(tmp_path):
+    db_path = tmp_path / "approval_risk_reject.sqlite3"
+    client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+
+    response = client.post(
+        "/signals/submit",
+        json={
+            "signal_id": "approval-risk-reject",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "40",
+            "price": "50000",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "rejected"
+    assert body["reason"] == "risk_rejected"
+    assert body["risk"]["approved"] is False
+    assert body["risk"]["reason_codes"] == ["stop_loss_required"]
+    assert client.get("/orders").json()["orders"] == []
+    assert client.get("/approvals").json()["pending"] == []
+    audit_types = [event["event_type"] for event in client.get("/audit").json()["events"]]
+    assert audit_types == ["signal.received", "order.rejected"]
+
+
+def test_approval_preview_rejects_risk_invalid_signal(tmp_path):
+    client = TestClient(
+        create_app(repository=SQLiteRepository(tmp_path / "approval_preview_reject.sqlite3"), require_approval=True)
+    )
+
+    response = client.post(
+        "/signals/preview",
+        json={
+            "symbol": "ETHUSDT",
+            "side": "buy",
+            "quote_amount": "60",
+            "price": "3000",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk"]["approved"] is False
+    assert body["risk"]["reason_codes"] == ["stop_loss_required"]
+    assert body["execution"]["next_status"] == "rejected"
+    assert body["execution"]["would_place_order"] is False
+    assert client.get("/approvals").json()["pending"] == []

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 from .execution import ExecutionResult, PaperExchange
 from .idempotency import InMemoryIdempotencyStore
-from .risk import AccountState, RiskConfig, RiskDecision, evaluate_signal
+from .risk import AccountState, RiskConfig, evaluate_signal
 from .signals import CryptoSignal
 
 
@@ -47,16 +45,5 @@ class TradingEngine:
             return ExecutionResult(status="duplicate", decision=decision, reason="duplicate_signal")
 
         order = self.exchange.submit(signal, decision)
-        self._apply_account_exposure(signal, decision)
+        self.account_state.open_notional = self.exchange.open_notional()
         return ExecutionResult(status="accepted", decision=decision, order=order)
-
-    def _apply_account_exposure(self, signal: CryptoSignal, decision: RiskDecision) -> None:
-        if decision.order_notional is None:
-            return
-        if signal.side == "buy":
-            self.account_state.open_notional += decision.order_notional
-        elif signal.side == "sell":
-            self.account_state.open_notional = max(
-                self.account_state.open_notional - decision.order_notional,
-                Decimal("0"),
-            )

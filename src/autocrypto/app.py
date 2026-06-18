@@ -484,12 +484,12 @@ def _signal_preview(
     decision = evaluate_signal(signal, engine.risk_config, engine.account_state)
     if engine.halted:
         next_status = "halted"
+    elif not decision.approved:
+        next_status = "rejected"
     elif require_approval:
         next_status = "approval_required"
-    elif decision.approved:
-        next_status = "accepted"
     else:
-        next_status = "rejected"
+        next_status = "accepted"
 
     return {
         "signal": _signal_to_dict(signal),

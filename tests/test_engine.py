@@ -101,3 +101,42 @@ def test_engine_updates_open_notional_and_blocks_cumulative_exposure():
     assert second.status == "rejected"
     assert "max_open_notional_exceeded" in second.decision.reason_codes
     assert len(engine.exchange.orders) == 1
+
+
+def test_engine_recomputes_open_notional_after_partial_sell_at_exit_price():
+    account = AccountState(open_notional=Decimal("0"))
+    engine = TradingEngine(
+        exchange=PaperExchange(),
+        risk_config=RiskConfig(max_order_notional=Decimal("1000"), max_open_notional=Decimal("1000")),
+        account_state=account,
+        idempotency=InMemoryIdempotencyStore(),
+    )
+    buy_signal = normalize_signal(
+        {
+            "signal_id": "partial-sell-entry",
+            "symbol": "SOL/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "50",
+            "stop_loss_pct": "2",
+        },
+        source="test",
+    )
+    sell_signal = normalize_signal(
+        {
+            "signal_id": "partial-sell-exit",
+            "symbol": "SOL/USDT",
+            "side": "sell",
+            "base_amount": "1",
+            "price": "60",
+        },
+        source="test",
+    )
+
+    buy = engine.process_signal(buy_signal)
+    sell = engine.process_signal(sell_signal)
+
+    assert buy.status == "accepted"
+    assert sell.status == "accepted"
+    assert engine.exchange.open_notional() == Decimal("50")
+    assert account.open_notional == Decimal("50")

@@ -4,7 +4,9 @@ from typing import Any
 
 from .approvals import ApprovalQueue
 from .engine import TradingEngine
+from .execution import ExecutionResult
 from .repository import SQLiteRepository
+from .risk import evaluate_signal
 from .signals import CryptoSignal
 
 
@@ -48,6 +50,12 @@ class SignalIntakeService:
             self.repository.record_audit("signal.received", {"signal_id": signal.signal_id})
 
         if self.require_approval:
+            decision = evaluate_signal(signal, self.engine.risk_config, self.engine.account_state)
+            if not decision.approved:
+                result = ExecutionResult(status="rejected", decision=decision, reason="risk_rejected")
+                self._record_result(signal, result)
+                return result.to_dict()
+
             if self.repository:
                 self.repository.save_pending_approval(signal)
                 self.repository.record_audit("approval.requested", {"signal_id": signal.signal_id})
