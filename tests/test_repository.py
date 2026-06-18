@@ -3,7 +3,7 @@ import sqlite3
 from decimal import Decimal
 
 from autocrypto.execution import ExitOrder, PaperOrder
-from autocrypto.repository import AuditEvent, SQLiteRepository
+from autocrypto.repository import SQLiteRepository
 from autocrypto.signals import normalize_signal
 
 
@@ -41,10 +41,10 @@ def test_sqlite_repository_persists_signals_orders_and_audit_events(tmp_path):
     assert reopened.list_signals()[0]["signal_id"] == signal.signal_id
     assert reopened.list_orders()[0]["order_id"] == "paper-1"
     assert reopened.list_orders()[0]["exit_orders"][0]["kind"] == "stop_loss"
-    assert reopened.list_audit()[0] == AuditEvent(
-        event_type="order.accepted",
-        data={"order_id": "paper-1"},
-    )
+    audit_event = reopened.list_audit()[0]
+    assert audit_event.event_type == "order.accepted"
+    assert audit_event.data == {"order_id": "paper-1"}
+    assert audit_event.created_at
 
 
 def test_sqlite_repository_claims_signal_once(tmp_path):

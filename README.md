@@ -21,7 +21,7 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Shows persisted signal history with one-click reload into the Trading Desk
 - Supports quote-notional and base-quantity ticket sizing, paper position close controls, bracket trigger tests, and local unrealized P&L marks in the operator UI
 - Captures inline halt and approval rejection reasons in operator workflows
-- Exports filtered audit events to CSV and copies JSON payloads from operator panels
+- Shows timestamped audit events, exports filtered audit CSVs, and copies JSON payloads from operator panels
 - Exposes CCXT venue discovery and capability inspection without enabling live execution
 - Tracks a curated Bitcoin platform registry for Coinbase, Kraken, Gemini, Bitstamp, Binance.US, Alpaca, Robinhood, Crypto.com, OKX, Bybit, KuCoin, Bitget, Gate.io, MEXC, Phemex, BitMEX, Deribit, and Bitunix
 - Provides a minimal Discord slash-command client for `/health` and `/signal_test`

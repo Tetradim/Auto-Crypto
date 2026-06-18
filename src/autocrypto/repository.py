@@ -14,9 +14,10 @@ from .signals import CryptoSignal, normalize_signal
 class AuditEvent:
     event_type: str
     data: dict[str, Any]
+    created_at: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {"event_type": self.event_type, "data": self.data}
+        return {"event_type": self.event_type, "data": self.data, "created_at": self.created_at}
 
 
 class SQLiteRepository:
@@ -120,9 +121,16 @@ class SQLiteRepository:
     def list_audit(self) -> list[AuditEvent]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT event_type, payload FROM audit_events ORDER BY rowid ASC"
+                "SELECT event_type, payload, created_at FROM audit_events ORDER BY rowid ASC"
             ).fetchall()
-        return [AuditEvent(event_type=row["event_type"], data=json.loads(row["payload"])) for row in rows]
+        return [
+            AuditEvent(
+                event_type=row["event_type"],
+                data=json.loads(row["payload"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
 
     def _init_schema(self) -> None:
         with self._connect() as conn:

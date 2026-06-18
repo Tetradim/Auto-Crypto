@@ -610,16 +610,23 @@ function renderAudit() {
   const events = filteredAuditEvents();
   $("#auditRows").innerHTML =
     events.length > 0
-      ? events.slice().reverse().map((event) => `<tr><td>${escapeHtml(event.event_type)}</td><td>${escapeHtml(JSON.stringify(event.data))}</td><td><button type="button" data-action="copy-json" data-json="${escapeHtml(JSON.stringify(event))}">Copy</button></td></tr>`).join("")
-      : `<tr><td colspan="3">No audit events match.</td></tr>`;
+      ? events.slice().reverse().map((event) => `<tr><td>${escapeHtml(formatAuditTime(event.created_at))}</td><td>${escapeHtml(event.event_type)}</td><td>${escapeHtml(JSON.stringify(event.data))}</td><td><button type="button" data-action="copy-json" data-json="${escapeHtml(JSON.stringify(event))}">Copy</button></td></tr>`).join("")
+      : `<tr><td colspan="4">No audit events match.</td></tr>`;
 }
 
 function filteredAuditEvents() {
   const query = $("#auditSearch").value.trim().toLowerCase();
   return (appState.data?.audit || []).filter((event) => {
-    const text = `${event.event_type} ${JSON.stringify(event.data)}`.toLowerCase();
+    const text = `${event.created_at || ""} ${event.event_type} ${JSON.stringify(event.data)}`.toLowerCase();
     return !query || text.includes(query);
   });
+}
+
+function formatAuditTime(value) {
+  if (!value) return "-";
+  const parsed = new Date(`${String(value).replace(" ", "T")}Z`);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString();
 }
 
 function csvCell(value) {
@@ -1107,8 +1114,8 @@ function exportState() {
 function exportAuditCsv() {
   const events = filteredAuditEvents();
   const rows = [
-    ["event_type", "data_json"],
-    ...events.map((event) => [event.event_type, JSON.stringify(event.data)]),
+    ["created_at", "event_type", "data_json"],
+    ...events.map((event) => [event.created_at || "", event.event_type, JSON.stringify(event.data)]),
   ];
   const csv = `${rows.map((row) => row.map(csvCell).join(",")).join("\n")}\n`;
   const blob = new Blob([csv], { type: "text/csv" });
