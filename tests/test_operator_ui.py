@@ -18,6 +18,8 @@ def test_operator_ui_is_served_from_backend():
     assert "Base quantity" in ui.text
     assert "Signal History" in ui.text
     assert "Control reason" in ui.text
+    assert "copyCapabilityButton" in ui.text
+    assert "copyBitunixButton" in ui.text
     assert script.status_code == 200
     assert "submitSignal" in script.text
     assert "previewSignal" in script.text

@@ -1095,11 +1095,21 @@ function exportState() {
 }
 
 async function copyText(value) {
-  if (navigator.clipboard) {
+  if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(value);
     setStatus("Copied to clipboard.", "ok");
   } else {
-    setStatus("Clipboard API unavailable in this browser.", "warn");
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.inset = "0 auto auto 0";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    setStatus(copied ? "Copied to clipboard." : "Clipboard copy unavailable in this browser.", copied ? "ok" : "warn");
   }
 }
 
@@ -1116,6 +1126,8 @@ function bindEvents() {
   $("#previewSignalButton").addEventListener("click", () => previewSignal($("#signalText").value).catch((error) => setStatus(error.message, "error")));
   $("#submitSignalButton").addEventListener("click", () => submitSignal($("#signalText").value).catch((error) => setStatus(error.message, "error")));
   $("#copyPayloadButton").addEventListener("click", () => copyText($("#payloadPreview").textContent).catch((error) => setStatus(error.message, "error")));
+  $("#copyCapabilityButton").addEventListener("click", () => copyText($("#capabilityView").textContent).catch((error) => setStatus(error.message, "error")));
+  $("#copyBitunixButton").addEventListener("click", () => copyText($("#bitunixView").textContent).catch((error) => setStatus(error.message, "error")));
   $("#buildTicketButton").addEventListener("click", () => {
     $("#signalText").value = ticketToText();
     activateView("signals");
