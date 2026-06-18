@@ -40,6 +40,9 @@ def test_operator_ui_is_served_from_backend():
     assert script.status_code == 200
     assert "submitSignal" in script.text
     assert "previewSignal" in script.text
+    assert "orderDeskRow" in script.text
+    assert "inspect-order" in script.text
+    assert "data-json" in script.text
     assert "closePosition" in script.text
     assert "data-close-label" in script.text
     assert "Close 25%" in script.text

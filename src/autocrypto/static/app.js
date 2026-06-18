@@ -389,6 +389,26 @@ function orderRuntimeRow(order) {
   `;
 }
 
+function orderDeskRow(order) {
+  const payload = escapeHtml(JSON.stringify(order));
+  return `
+    <tr>
+      <td title="${escapeHtml(order.order_id)}">${escapeHtml(order.order_id)}</td>
+      <td>${escapeHtml(order.symbol)}</td>
+      <td class="${order.side === "buy" ? "up" : "down"}">${escapeHtml(order.side)}</td>
+      <td>${money(order.notional)}</td>
+      <td>${order.price ? money(order.price) : "market"}</td>
+      <td>${escapeHtml(order.status)}</td>
+      <td>
+        <div class="row-actions">
+          <button type="button" data-action="inspect-order" data-order-id="${escapeHtml(order.order_id)}">Inspect</button>
+          <button type="button" data-action="copy-json" data-json="${payload}">Copy</button>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
 function renderSignals() {
   const approvals = appState.data?.approvals || [];
   $("#approvalCount").textContent = String(approvals.length);
@@ -565,12 +585,12 @@ function renderOrderBook(mid) {
 
 function renderDeskTable() {
   if (appState.deskTable === "orders") {
-    $("#deskTableHead").innerHTML = `<tr><th>Order</th><th>Pair</th><th>Side</th><th>Notional</th><th>Price</th><th>Status</th></tr>`;
+    $("#deskTableHead").innerHTML = `<tr><th>Order</th><th>Pair</th><th>Side</th><th>Notional</th><th>Price</th><th>Status</th><th>Action</th></tr>`;
     const orders = appState.data?.orders || [];
     $("#deskTableBody").innerHTML =
       orders.length > 0
-        ? orders.slice(-12).reverse().map((order) => `<tr><td>${escapeHtml(order.order_id)}</td><td>${escapeHtml(order.symbol)}</td><td>${escapeHtml(order.side)}</td><td>${money(order.notional)}</td><td>${order.price ? money(order.price) : "market"}</td><td>${escapeHtml(order.status)}</td></tr>`).join("")
-        : `<tr><td colspan="6">No orders submitted yet.</td></tr>`;
+        ? orders.slice(-12).reverse().map(orderDeskRow).join("")
+        : `<tr><td colspan="7">No orders submitted yet.</td></tr>`;
     return;
   }
 
