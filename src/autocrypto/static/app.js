@@ -52,6 +52,7 @@ const strategies = [
 
 const STRATEGY_PIN_STORAGE_KEY = "autoCryptoPinnedStrategies";
 const STRATEGY_BACKTEST_STORAGE_KEY = "autoCryptoBacktests";
+const TICKET_DRAFT_STORAGE_KEY = "autoCryptoTicketDraft";
 
 const appState = {
   data: null,
@@ -158,6 +159,15 @@ function compareOptional(left, right, direction = "desc") {
   if (left === null) return 1;
   if (right === null) return -1;
   return direction === "asc" ? left - right : right - left;
+}
+
+function readStoredTicketDraft() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TICKET_DRAFT_STORAGE_KEY) || "null");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function setStatus(message, type = "") {
@@ -840,6 +850,62 @@ function setTicketStrategy(name) {
   select.value = value;
 }
 
+function ticketDraftPayload() {
+  return {
+    strategy: $("#ticketStrategy").value,
+    symbol: compactSymbol($("#ticketSymbol").value || appState.selectedPair),
+    side: $("#ticketSide").value,
+    size_mode: $("#ticketSizeMode").value,
+    amount: $("#ticketAmount").value,
+    price: $("#ticketPrice").value,
+    stop_loss_pct: $("#ticketStop").value,
+    take_profit_pct: $("#ticketTakeProfit").value,
+    saved_at: new Date().toISOString(),
+  };
+}
+
+function formatDraftTime(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "saved locally";
+  return `saved ${parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function renderTicketDraftStatus(draft = readStoredTicketDraft()) {
+  const container = $("#ticketDraftStatus");
+  if (!container) return;
+  container.textContent = draft ? formatDraftTime(draft.saved_at) : "no saved draft";
+}
+
+function saveTicketDraft() {
+  const draft = ticketDraftPayload();
+  localStorage.setItem(TICKET_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+  renderTicketDraftStatus(draft);
+}
+
+function applyStoredTicketDraft() {
+  const draft = readStoredTicketDraft();
+  if (!draft) {
+    renderTicketDraftStatus(null);
+    return;
+  }
+  setTicketStrategy(draft.strategy || "manual");
+  $("#ticketSymbol").value = draft.symbol || $("#ticketSymbol").value;
+  $("#ticketSide").value = draft.side || $("#ticketSide").value;
+  setTicketSizeMode(draft.size_mode || "quote", draft.amount);
+  $("#ticketPrice").value = draft.price || $("#ticketPrice").value;
+  $("#ticketStop").value = draft.stop_loss_pct || "";
+  $("#ticketTakeProfit").value = draft.take_profit_pct || "";
+  appState.selectedPair = compactSymbol(draft.symbol || appState.selectedPair);
+  $("#signalText").value = ticketToText();
+  renderTicketDraftStatus(draft);
+}
+
+function clearTicketDraft() {
+  localStorage.removeItem(TICKET_DRAFT_STORAGE_KEY);
+  renderTicketDraftStatus(null);
+  setStatus("Ticket draft forgotten. Current fields are unchanged.", "ok");
+}
+
 async function parseSignal() {
   const message = $("#signalText").value;
   const payload = await api("/signals/parse-text", { method: "POST", body: { message } });
@@ -1006,6 +1072,7 @@ async function copyStrategy(strategyId) {
   $("#signalText").value = ticketToText();
   localStorage.setItem("autoCryptoImportedStrategy", JSON.stringify(strategy));
   appState.selectedPair = strategy.pair;
+  saveTicketDraft();
   renderStrategies();
   activateView("trading");
   $("#ticketStatus").textContent = "previewing";
@@ -1066,6 +1133,7 @@ function inspectOrder(orderId) {
   $("#ticketStop").value = "";
   $("#ticketTakeProfit").value = "";
   $("#ticketStatus").textContent = `loaded ${orderId}`;
+  saveTicketDraft();
   activateView("trading");
 }
 
@@ -1081,6 +1149,7 @@ function loadSignalTicket(signalId) {
   $("#ticketTakeProfit").value = signal.take_profit_pct || "";
   $("#ticketStatus").textContent = `loaded ${signal.signal_id}`;
   appState.selectedPair = compactSymbol(signal.symbol);
+  saveTicketDraft();
   activateView("trading");
   setStatus(`Loaded ${prettySymbol(signal.symbol)} signal into the ticket.`, "ok");
 }
@@ -1348,8 +1417,10 @@ function bindEvents() {
   $("#copyPayloadButton").addEventListener("click", () => copyText($("#payloadPreview").textContent).catch((error) => setStatus(error.message, "error")));
   $("#copyCapabilityButton").addEventListener("click", () => copyText($("#capabilityView").textContent).catch((error) => setStatus(error.message, "error")));
   $("#copyBitunixButton").addEventListener("click", () => copyText($("#bitunixView").textContent).catch((error) => setStatus(error.message, "error")));
+  $("#clearTicketDraftButton").addEventListener("click", clearTicketDraft);
   $("#buildTicketButton").addEventListener("click", () => {
     $("#signalText").value = ticketToText();
+    saveTicketDraft();
     activateView("signals");
     setStatus("Ticket converted into Signal Forge text.", "ok");
   });
@@ -1362,10 +1433,16 @@ function bindEvents() {
   });
   $("#ticketSizeMode").addEventListener("change", () => {
     setTicketSizeMode($("#ticketSizeMode").value);
+    saveTicketDraft();
     setStatus(`Ticket size mode set to ${$("#ticketAmountLabel").textContent.toLowerCase()}.`, "ok");
   });
   $("#ticketStrategy").addEventListener("change", () => {
+    saveTicketDraft();
     setStatus(`Ticket strategy set to ${$("#ticketStrategy").value}.`, "ok");
+  });
+  ["ticketSymbol", "ticketSide", "ticketAmount", "ticketPrice", "ticketStop", "ticketTakeProfit"].forEach((id) => {
+    $(`#${id}`).addEventListener("input", saveTicketDraft);
+    $(`#${id}`).addEventListener("change", saveTicketDraft);
   });
   $("#updatePriceButton").addEventListener("click", () => {
     appState.selectedPair = compactSymbol($("#ticketSymbol").value || appState.selectedPair);
@@ -1405,6 +1482,7 @@ function bindEvents() {
       appState.selectedPair = button.dataset.pair;
       $("#ticketSymbol").value = button.dataset.pair;
       $("#ticketPrice").value = Math.round(currentMarkPrice(button.dataset.pair));
+      saveTicketDraft();
       renderTradingDesk();
       drawMainChart();
       setStatus(`${prettySymbol(appState.selectedPair)} selected.`, "ok");
@@ -1493,5 +1571,6 @@ function bindEvents() {
 }
 
 bindEvents();
+applyStoredTicketDraft();
 activateView(location.hash.slice(1) || "dashboard");
 loadState();

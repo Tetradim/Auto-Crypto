@@ -28,6 +28,8 @@ def test_operator_ui_is_served_from_backend():
     assert "Sim return" in ui.text
     assert "Sim drawdown" in ui.text
     assert "ticketPreviewSummary" in ui.text
+    assert "ticketDraftStatus" in ui.text
+    assert "clearTicketDraftButton" in ui.text
     assert "copyCapabilityButton" in ui.text
     assert "copyBitunixButton" in ui.text
     assert script.status_code == 200
@@ -51,6 +53,9 @@ def test_operator_ui_is_served_from_backend():
     assert "writeStoredBacktests" in script.text
     assert "backtestSortValue" in script.text
     assert "compareOptional" in script.text
+    assert "TICKET_DRAFT_STORAGE_KEY" in script.text
+    assert "saveTicketDraft" in script.text
+    assert "applyStoredTicketDraft" in script.text
 
 
 def test_ui_state_returns_dashboard_contract(tmp_path):
