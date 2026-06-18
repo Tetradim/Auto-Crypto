@@ -36,6 +36,10 @@
         <strong class="amber">Locked</strong>
       </div>
       <div class="rail-card">
+        <span>Control reason</span>
+        <strong id="haltReasonLabel">none</strong>
+      </div>
+      <div class="rail-card">
         <span>Last refresh</span>
         <strong id="lastRefresh">never</strong>
       </div>
@@ -45,6 +49,7 @@
       <header class="topbar">
         <div class="market-strip" id="marketStrip" aria-label="Market summary"></div>
         <div class="operator-actions">
+          <input id="haltReasonInput" value="operator requested halt" aria-label="Halt reason" />
           <button type="button" id="refreshButton" title="Refresh dashboard state">Refresh</button>
           <button type="button" id="haltButton" class="danger">Global Halt</button>
           <button type="button" id="resumeButton">Resume</button>

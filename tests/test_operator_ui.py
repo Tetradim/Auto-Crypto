@@ -17,6 +17,7 @@ def test_operator_ui_is_served_from_backend():
     assert "Risk Preview" in ui.text
     assert "Base quantity" in ui.text
     assert "Signal History" in ui.text
+    assert "Control reason" in ui.text
     assert script.status_code == 200
     assert "submitSignal" in script.text
     assert "previewSignal" in script.text
@@ -24,6 +25,7 @@ def test_operator_ui_is_served_from_backend():
     assert "loadSignalTicket" in script.text
     assert "trigger-exit-price" in script.text
     assert "Unrealized" in script.text
+    assert "haltReasonInput" in script.text
     assert "loadPlatforms" in script.text
     assert "loadBitunixTickers" in script.text
 

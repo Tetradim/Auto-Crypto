@@ -188,8 +188,11 @@ function renderAll() {
 function renderShell() {
   const data = appState.data || {};
   const halted = Boolean(data.control?.halted);
+  const reason = String(data.control?.reason || "");
   $("#railMode").textContent = halted ? "Halted" : "Armed";
   $("#railMode").className = halted ? "red" : "green";
+  $("#haltReasonLabel").textContent = halted ? reason || "manual halt" : "none";
+  $("#haltReasonLabel").className = halted ? "amber" : "";
   $("#lastRefresh").textContent = new Date().toLocaleTimeString();
   $("#haltButton").disabled = halted;
   $("#resumeButton").disabled = !halted;
@@ -762,7 +765,7 @@ async function updateMarkPrice(symbol, price) {
 }
 
 async function haltTrading() {
-  const reason = prompt("Halt reason", "operator requested halt") || "operator requested halt";
+  const reason = $("#haltReasonInput").value.trim() || "operator requested halt";
   const result = await api("/control/halt", { method: "POST", body: { reason } });
   appState.lastPayload = result;
   setStatus(`Trading halted: ${result.reason}.`, "warn");
