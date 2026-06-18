@@ -53,6 +53,7 @@ const strategies = [
 const STRATEGY_PIN_STORAGE_KEY = "autoCryptoPinnedStrategies";
 const STRATEGY_BACKTEST_STORAGE_KEY = "autoCryptoBacktests";
 const TICKET_DRAFT_STORAGE_KEY = "autoCryptoTicketDraft";
+const AUTO_REFRESH_STORAGE_KEY = "autoCryptoAutoRefresh";
 
 const appState = {
   data: null,
@@ -73,6 +74,9 @@ const appState = {
   backtests: readStoredBacktests(),
   selectedExchange: null,
   markPrices: {},
+  refreshInFlight: false,
+  autoRefreshTimer: null,
+  autoRefreshMs: 10000,
 };
 
 function escapeHtml(value) {
@@ -208,6 +212,8 @@ async function api(path, options = {}) {
 }
 
 async function loadState(showStatus = true) {
+  if (appState.refreshInFlight) return;
+  appState.refreshInFlight = true;
   try {
     appState.data = await api("/ui/state");
     await loadExchanges(false);
@@ -216,7 +222,29 @@ async function loadState(showStatus = true) {
     if (showStatus) setStatus("State refreshed from Auto-Crypto API.", "ok");
   } catch (error) {
     setStatus(`Unable to load API state: ${error.message}`, "error");
+  } finally {
+    appState.refreshInFlight = false;
   }
+}
+
+function setAutoRefresh(enabled, { persist = true, announce = true } = {}) {
+  const button = $("#autoRefreshButton");
+  if (appState.autoRefreshTimer) {
+    clearInterval(appState.autoRefreshTimer);
+    appState.autoRefreshTimer = null;
+  }
+  if (enabled) {
+    appState.autoRefreshTimer = window.setInterval(() => loadState(false), appState.autoRefreshMs);
+  }
+  button.classList.toggle("is-selected", enabled);
+  button.setAttribute("aria-pressed", String(enabled));
+  button.textContent = enabled ? "Auto On" : "Auto 10s";
+  if (persist) localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, enabled ? "true" : "false");
+  if (announce) setStatus(enabled ? "Auto refresh enabled every 10 seconds." : "Auto refresh disabled.", enabled ? "ok" : "");
+}
+
+function restoreAutoRefresh() {
+  setAutoRefresh(localStorage.getItem(AUTO_REFRESH_STORAGE_KEY) === "true", { persist: false, announce: false });
 }
 
 async function loadExchanges(showStatus = true) {
@@ -1457,6 +1485,9 @@ async function copyText(value) {
 function bindEvents() {
   $$(".nav-item").forEach((item) => item.addEventListener("click", () => activateView(item.dataset.view)));
   $("#refreshButton").addEventListener("click", loadState);
+  $("#autoRefreshButton").addEventListener("click", () => {
+    setAutoRefresh($("#autoRefreshButton").getAttribute("aria-pressed") !== "true");
+  });
   $("#haltButton").addEventListener("click", () => haltTrading().catch((error) => setStatus(error.message, "error")));
   $("#resumeButton").addEventListener("click", () => resumeTrading().catch((error) => setStatus(error.message, "error")));
   $("#sampleSignalButton").addEventListener("click", () => {
@@ -1627,5 +1658,6 @@ function bindEvents() {
 
 bindEvents();
 applyStoredTicketDraft();
+restoreAutoRefresh();
 activateView(location.hash.slice(1) || "dashboard");
 loadState();

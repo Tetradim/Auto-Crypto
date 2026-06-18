@@ -32,6 +32,7 @@ def test_operator_ui_is_served_from_backend():
     assert "clearTicketDraftButton" in ui.text
     assert "data-size-preset" in ui.text
     assert "Remaining Cap" in ui.text
+    assert "autoRefreshButton" in ui.text
     assert "copyCapabilityButton" in ui.text
     assert "copyBitunixButton" in ui.text
     assert script.status_code == 200
@@ -63,6 +64,9 @@ def test_operator_ui_is_served_from_backend():
     assert "applyStoredTicketDraft" in script.text
     assert "maxTicketNotional" in script.text
     assert "applySizePreset" in script.text
+    assert "AUTO_REFRESH_STORAGE_KEY" in script.text
+    assert "setAutoRefresh" in script.text
+    assert "refreshInFlight" in script.text
 
 
 def test_ui_state_returns_dashboard_contract(tmp_path):

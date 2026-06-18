@@ -247,9 +247,15 @@ pre {
 .operator-actions {
   align-self: start;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 92px 118px 94px;
+  grid-template-columns: minmax(180px, 1fr) 92px 96px 118px 94px;
   gap: 10px;
-  min-width: min(100%, 520px);
+  min-width: min(100%, 626px);
+}
+
+#autoRefreshButton.is-selected {
+  border-color: rgba(40, 216, 161, 0.78);
+  background: rgba(40, 216, 161, 0.14);
+  color: var(--green);
 }
 
 .danger {
