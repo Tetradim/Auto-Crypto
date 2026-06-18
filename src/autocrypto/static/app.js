@@ -986,6 +986,21 @@ function clearTicketDraft() {
   setStatus("Ticket draft forgotten. Current fields are unchanged.", "ok");
 }
 
+async function copyTicketAlert() {
+  const text = ticketToText();
+  $("#signalText").value = text;
+  saveTicketDraft();
+  await copyText(text);
+}
+
+async function copyTicketJson() {
+  const payload = ticketPayload();
+  appState.lastPayload = payload;
+  renderSignals();
+  saveTicketDraft();
+  await copyText(JSON.stringify(payload, null, 2));
+}
+
 async function parseSignal() {
   const message = $("#signalText").value;
   const payload = await api("/signals/parse-text", { method: "POST", body: { message } });
@@ -1500,6 +1515,8 @@ function bindEvents() {
   $("#copyPayloadButton").addEventListener("click", () => copyText($("#payloadPreview").textContent).catch((error) => setStatus(error.message, "error")));
   $("#copyCapabilityButton").addEventListener("click", () => copyText($("#capabilityView").textContent).catch((error) => setStatus(error.message, "error")));
   $("#copyBitunixButton").addEventListener("click", () => copyText($("#bitunixView").textContent).catch((error) => setStatus(error.message, "error")));
+  $("#copyTicketAlertButton").addEventListener("click", () => copyTicketAlert().catch((error) => setStatus(error.message, "error")));
+  $("#copyTicketJsonButton").addEventListener("click", () => copyTicketJson().catch((error) => setStatus(error.message, "error")));
   $("#clearTicketDraftButton").addEventListener("click", clearTicketDraft);
   $("#buildTicketButton").addEventListener("click", () => {
     $("#signalText").value = ticketToText();

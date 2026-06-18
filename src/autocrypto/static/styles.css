@@ -795,6 +795,18 @@ pre {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.ticket-copy-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.ticket-copy-actions button {
+  min-height: 30px;
+  padding: 5px 7px;
+  font-size: 0.82rem;
+}
+
 .size-presets {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1346,6 +1358,7 @@ meter::-webkit-meter-optimum-value {
 
   .builder-actions,
   .ticket-actions,
+  .ticket-copy-actions,
   .size-presets,
   .bitunix-controls {
     grid-template-columns: 1fr;
