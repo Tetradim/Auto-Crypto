@@ -38,7 +38,9 @@ def test_sqlite_repository_persists_signals_orders_and_audit_events(tmp_path):
 
     reopened = SQLiteRepository(db_path)
 
-    assert reopened.list_signals()[0]["signal_id"] == signal.signal_id
+    persisted_signal = reopened.list_signals()[0]
+    assert persisted_signal["signal_id"] == signal.signal_id
+    assert persisted_signal["created_at"]
     assert reopened.list_orders()[0]["order_id"] == "paper-1"
     assert reopened.list_orders()[0]["exit_orders"][0]["kind"] == "stop_loss"
     audit_event = reopened.list_audit()[0]
@@ -162,3 +164,4 @@ def test_sqlite_repository_backfills_idempotency_claims_from_existing_orders(tmp
     repo = SQLiteRepository(db_path)
 
     assert repo.claim_signal(signal) is False
+    assert repo.list_signals()[0]["created_at"]

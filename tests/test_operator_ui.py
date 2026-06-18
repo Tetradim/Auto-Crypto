@@ -20,6 +20,7 @@ def test_operator_ui_is_served_from_backend():
     assert "Risk Preview" in ui.text
     assert "Base quantity" in ui.text
     assert "Signal History" in ui.text
+    assert "<thead><tr><th>Time</th><th>Pair</th><th>Side</th><th>Size</th><th>Price</th><th>Strategy</th><th>Action</th></tr></thead>" in ui.text
     assert "Control reason" in ui.text
     assert "Export CSV" in ui.text
     assert "Reject reason" in ui.text

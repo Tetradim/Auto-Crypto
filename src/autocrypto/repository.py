@@ -33,8 +33,9 @@ class SQLiteRepository:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO signals (signal_id, payload)
-                VALUES (?, ?)
+                INSERT INTO signals (signal_id, payload, created_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(signal_id) DO UPDATE SET payload = excluded.payload
                 """,
                 (signal.signal_id, json.dumps(payload, sort_keys=True)),
             )
@@ -52,8 +53,9 @@ class SQLiteRepository:
                 )
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO signals (signal_id, payload)
-                    VALUES (?, ?)
+                    INSERT INTO signals (signal_id, payload, created_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(signal_id) DO UPDATE SET payload = excluded.payload
                     """,
                     (signal.signal_id, json.dumps(payload, sort_keys=True)),
                 )
@@ -63,8 +65,13 @@ class SQLiteRepository:
 
     def list_signals(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM signals ORDER BY rowid ASC").fetchall()
-        return [json.loads(row["payload"]) for row in rows]
+            rows = conn.execute("SELECT payload, created_at FROM signals ORDER BY rowid ASC").fetchall()
+        signals = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["created_at"] = row["created_at"]
+            signals.append(payload)
+        return signals
 
     def save_pending_approval(self, signal: CryptoSignal) -> None:
         payload = _signal_to_dict(signal)
@@ -138,7 +145,8 @@ class SQLiteRepository:
                 """
                 CREATE TABLE IF NOT EXISTS signals (
                     signal_id TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS orders (
@@ -167,6 +175,10 @@ class SQLiteRepository:
                 SELECT DISTINCT signal_id FROM orders;
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(signals)").fetchall()}
+            if "created_at" not in columns:
+                conn.execute("ALTER TABLE signals ADD COLUMN created_at TEXT")
+            conn.execute("UPDATE signals SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)

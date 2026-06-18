@@ -361,13 +361,14 @@ function renderSignalHistory() {
       signal.strategy_id,
       signal.quote_amount,
       signal.base_amount,
+      signal.created_at,
     ].join(" ").toLowerCase();
     return !query || text.includes(query);
   });
   $("#signalHistoryRows").innerHTML =
     signals.length > 0
       ? signals.slice().reverse().map(signalHistoryRow).join("")
-      : `<tr><td colspan="6">No submitted signals match.</td></tr>`;
+      : `<tr><td colspan="7">No submitted signals match.</td></tr>`;
 }
 
 function signalHistoryRow(signal) {
@@ -379,6 +380,7 @@ function signalHistoryRow(signal) {
       : "-";
   return `
     <tr>
+      <td>${escapeHtml(formatAuditTime(signal.created_at))}</td>
       <td title="${escapeHtml(signal.signal_id)}">${escapeHtml(signal.symbol)}</td>
       <td class="${signal.side === "buy" ? "up" : "down"}">${escapeHtml(signal.side)}</td>
       <td>${escapeHtml(size)}</td>
