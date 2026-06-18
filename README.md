@@ -17,6 +17,9 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Records paper orders, paper positions, realized PnL, active bracket lots, and audit events
 - Rehydrates paper positions, bracket lots, and exposure risk state from SQLite after restart
 - Triggers paper stop-loss/take-profit exits from `POST /market/price`
+- Previews server-side risk decisions from the operator UI without placing orders
+- Shows persisted signal history with one-click reload into the Trading Desk
+- Supports quote-notional and base-quantity ticket sizing, paper position close controls, bracket trigger tests, and local unrealized P&L marks in the operator UI
 - Exposes CCXT venue discovery and capability inspection without enabling live execution
 - Tracks a curated Bitcoin platform registry for Coinbase, Kraken, Gemini, Bitstamp, Binance.US, Alpaca, Robinhood, Crypto.com, OKX, Bybit, KuCoin, Bitget, Gate.io, MEXC, Phemex, BitMEX, Deribit, and Bitunix
 - Provides a minimal Discord slash-command client for `/health` and `/signal_test`
@@ -254,6 +257,10 @@ Signal intake:
 - `POST /webhooks/tradingview`
 - `POST /webhooks/text-alert`
 - `POST /signals/parse-text`
+- `POST /signals/preview-text`
+- `POST /signals/preview`
+- `POST /signals/submit-text`
+- `POST /signals/submit`
 
 Paper market updates:
 
