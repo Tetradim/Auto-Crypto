@@ -86,18 +86,24 @@ def test_sqlite_repository_persists_and_pops_pending_approval(tmp_path):
     repo.save_pending_approval(signal)
     reopened = SQLiteRepository(repo.path)
 
-    assert reopened.list_pending_approvals() == [
+    pending = reopened.list_pending_approvals()
+    assert pending == [
         {
             "signal_id": "needs-review",
+            "source": "test",
             "symbol": "ETH/USDT",
             "side": "buy",
             "exchange": "paper",
             "quote_amount": "40",
             "base_amount": None,
             "price": "3000",
+            "stop_loss_pct": "2",
+            "take_profit_pct": "4",
             "strategy_id": "manual",
+            "created_at": pending[0]["created_at"],
         }
     ]
+    assert pending[0]["created_at"]
 
     popped = reopened.pop_pending_approval("needs-review")
 

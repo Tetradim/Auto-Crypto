@@ -86,8 +86,13 @@ class SQLiteRepository:
 
     def list_pending_approvals(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM pending_approvals ORDER BY rowid ASC").fetchall()
-        return [_pending_summary(_signal_from_dict(json.loads(row["payload"]))) for row in rows]
+            rows = conn.execute(
+                "SELECT payload, created_at FROM pending_approvals ORDER BY rowid ASC"
+            ).fetchall()
+        return [
+            _pending_summary(_signal_from_dict(json.loads(row["payload"])), created_at=row["created_at"])
+            for row in rows
+        ]
 
     def pop_pending_approval(self, signal_id: str) -> CryptoSignal | None:
         with self._connect() as conn:
@@ -209,14 +214,18 @@ def _signal_from_dict(payload: dict[str, Any]) -> CryptoSignal:
     return normalize_signal(payload, source=str(payload["source"]))
 
 
-def _pending_summary(signal: CryptoSignal) -> dict[str, Any]:
+def _pending_summary(signal: CryptoSignal, *, created_at: str | None = None) -> dict[str, Any]:
     return {
         "signal_id": signal.signal_id,
+        "source": signal.source,
         "symbol": signal.symbol,
         "side": signal.side,
         "exchange": signal.exchange,
         "quote_amount": str(signal.quote_amount) if signal.quote_amount is not None else None,
         "base_amount": str(signal.base_amount) if signal.base_amount is not None else None,
         "price": str(signal.price) if signal.price is not None else None,
+        "stop_loss_pct": str(signal.stop_loss_pct) if signal.stop_loss_pct is not None else None,
+        "take_profit_pct": str(signal.take_profit_pct) if signal.take_profit_pct is not None else None,
         "strategy_id": signal.strategy_id,
+        "created_at": created_at,
     }

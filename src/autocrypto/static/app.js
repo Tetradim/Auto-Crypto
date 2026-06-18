@@ -275,15 +275,27 @@ function signalRow(signal, label = "needs approval") {
   const symbol = signal.symbol || "UNKNOWN";
   const size = signal.quote_amount ? `$${signal.quote_amount}` : signal.base_amount || "size?";
   const price = signal.price ? ` @ ${signal.price}` : "";
-  const actionButtons = label === "needs approval"
-    ? `<div class="row-actions"><button type="button" data-action="approve" data-signal-id="${escapeHtml(signal.signal_id)}">Approve</button><button type="button" data-action="reject" data-signal-id="${escapeHtml(signal.signal_id)}">Reject</button></div>`
-    : `<em>${escapeHtml(label)}</em>`;
+  const queued = signal.created_at ? `queued ${formatAuditTime(signal.created_at)} | ` : "";
+  const actionButtons = label === "needs approval" ? approvalActions(signal) : `<em>${escapeHtml(label)}</em>`;
   return `
     <article class="signal-row ${label === "needs approval" ? "priority" : ""}">
       <div class="coin-dot ${coinClass(symbol)}">${escapeHtml(symbol[0] || "?")}</div>
-      <div><strong>${escapeHtml(String(signal.side || "").toUpperCase())} ${escapeHtml(symbol)}</strong><span>${escapeHtml(signal.strategy_id || signal.source || "manual")} | ${escapeHtml(size)}${escapeHtml(price)}</span></div>
+      <div><strong>${escapeHtml(String(signal.side || "").toUpperCase())} ${escapeHtml(symbol)}</strong><span>${escapeHtml(queued)}${escapeHtml(signal.strategy_id || signal.source || "manual")} | ${escapeHtml(size)}${escapeHtml(price)}</span></div>
       ${actionButtons}
     </article>
+  `;
+}
+
+function approvalActions(signal) {
+  const signalId = escapeHtml(signal.signal_id);
+  const payload = escapeHtml(JSON.stringify(signal));
+  return `
+    <div class="row-actions">
+      <button type="button" data-action="approve" data-signal-id="${signalId}">Approve</button>
+      <button type="button" data-action="reject" data-signal-id="${signalId}">Reject</button>
+      <button type="button" data-action="preview-approval-ticket" data-signal-id="${signalId}">Preview</button>
+      <button type="button" data-action="copy-json" data-json="${payload}">Copy JSON</button>
+    </div>
   `;
 }
 
@@ -1151,6 +1163,18 @@ function inspectOrder(orderId) {
 function loadSignalTicket(signalId) {
   const signal = (appState.data?.signals || []).find((item) => item.signal_id === signalId);
   if (!signal) return;
+  loadSignalIntoTicket(signal, `loaded ${signal.signal_id}`);
+  setStatus(`Loaded ${prettySymbol(signal.symbol)} signal into the ticket.`, "ok");
+}
+
+function loadApprovalTicket(signalId) {
+  const signal = (appState.data?.approvals || []).find((item) => item.signal_id === signalId);
+  if (!signal) return;
+  loadSignalIntoTicket(signal, `approval ${signal.signal_id}`);
+  setStatus(`Loaded ${prettySymbol(signal.symbol)} approval into the ticket.`, "ok");
+}
+
+function loadSignalIntoTicket(signal, status) {
   setTicketStrategy(signal.strategy_id || "manual");
   $("#ticketSymbol").value = compactSymbol(signal.symbol);
   $("#ticketSide").value = String(signal.side || "buy").toUpperCase();
@@ -1158,16 +1182,24 @@ function loadSignalTicket(signalId) {
   $("#ticketPrice").value = signal.price || "";
   $("#ticketStop").value = signal.stop_loss_pct || "";
   $("#ticketTakeProfit").value = signal.take_profit_pct || "";
-  $("#ticketStatus").textContent = `loaded ${signal.signal_id}`;
+  $("#ticketStatus").textContent = status;
   appState.selectedPair = compactSymbol(signal.symbol);
   saveTicketDraft();
   activateView("trading");
-  setStatus(`Loaded ${prettySymbol(signal.symbol)} signal into the ticket.`, "ok");
 }
 
 async function previewSignalTicket(signalId) {
   loadSignalTicket(signalId);
   const signal = (appState.data?.signals || []).find((item) => item.signal_id === signalId);
+  const label = signal?.strategy_id || signalId;
+  const preview = await previewTicket({ activateSignals: false, label });
+  const status = String(preview.execution?.next_status || "unknown").replaceAll("_", " ");
+  $("#ticketStatus").textContent = `risk: ${status}`;
+}
+
+async function previewApprovalTicket(signalId) {
+  loadApprovalTicket(signalId);
+  const signal = (appState.data?.approvals || []).find((item) => item.signal_id === signalId);
   const label = signal?.strategy_id || signalId;
   const preview = await previewTicket({ activateSignals: false, label });
   const status = String(preview.execution?.next_status || "unknown").replaceAll("_", " ");
@@ -1570,6 +1602,7 @@ function bindEvents() {
     if (action === "inspect-order") inspectOrder(target.dataset.orderId);
     if (action === "load-signal-ticket") loadSignalTicket(target.dataset.signalId);
     if (action === "preview-signal-ticket") previewSignalTicket(target.dataset.signalId).catch((error) => setStatus(error.message, "error"));
+    if (action === "preview-approval-ticket") previewApprovalTicket(target.dataset.signalId).catch((error) => setStatus(error.message, "error"));
     if (action === "load-position-price") {
       appState.selectedPair = target.dataset.symbol;
       $("#ticketSymbol").value = target.dataset.symbol;

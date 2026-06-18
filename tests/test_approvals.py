@@ -24,7 +24,9 @@ def test_approval_required_mode_queues_signal_until_operator_approves(tmp_path):
     body = response.json()
     assert body["status"] == "approval_required"
     assert client.get("/orders").json()["orders"] == []
-    assert client.get("/approvals").json()["pending"][0]["signal_id"] == body["signal_id"]
+    pending = client.get("/approvals").json()["pending"][0]
+    assert pending["signal_id"] == body["signal_id"]
+    assert pending["created_at"]
 
     approved = client.post(f"/approvals/{body['signal_id']}/approve")
 
