@@ -25,6 +25,7 @@ def test_operator_ui_is_served_from_backend():
     assert "<thead><tr><th>Time</th><th>Pair</th><th>Side</th><th>Size</th><th>Price</th><th>Strategy</th><th>Action</th></tr></thead>" in ui.text
     assert "Control reason" in ui.text
     assert "Export CSV" in ui.text
+    assert "auditResultCount" in ui.text
     assert "Reject reason" in ui.text
     assert "<th>Qty</th>" in ui.text
     assert "<th>Time</th>" in ui.text
@@ -103,6 +104,7 @@ def test_operator_ui_is_served_from_backend():
     assert "haltReasonInput" in script.text
     assert "exportAuditCsv" in script.text
     assert "auditRow" in script.text
+    assert "auditCountLabel" in script.text
     assert "load-audit-related" in script.text
     assert "formatAuditTime" in script.text
     assert "loadPlatforms" in script.text

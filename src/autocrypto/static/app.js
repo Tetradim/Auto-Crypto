@@ -757,10 +757,16 @@ function renderBitunixStatus() {
 
 function renderAudit() {
   const events = filteredAuditEvents();
+  const total = appState.data?.audit?.length || 0;
+  $("#auditResultCount").textContent = auditCountLabel(events.length, total);
   $("#auditRows").innerHTML =
     events.length > 0
       ? events.slice().reverse().map(auditRow).join("")
       : `<tr><td colspan="4">No audit events match.</td></tr>`;
+}
+
+function auditCountLabel(visible, total) {
+  return $("#auditSearch").value.trim() ? `${visible}/${total} events` : `${total} events`;
 }
 
 function auditRow(event) {
