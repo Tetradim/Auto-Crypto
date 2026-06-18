@@ -30,6 +30,8 @@ def test_operator_ui_is_served_from_backend():
     assert "strategySearch" in ui.text
     assert "strategySort" in ui.text
     assert "strategyResultCount" in ui.text
+    assert "deskSearch" in ui.text
+    assert "Filter positions or orders" in ui.text
     assert "Sim return" in ui.text
     assert "Sim drawdown" in ui.text
     assert "ticketPreviewSummary" in ui.text
@@ -102,6 +104,9 @@ def test_operator_ui_is_served_from_backend():
     assert "writeStoredBacktests" in script.text
     assert "backtestSortValue" in script.text
     assert "compareOptional" in script.text
+    assert "deskSearch" in script.text
+    assert "deskRowMatches" in script.text
+    assert "No orders match the current filter." in script.text
     assert "saveTicketDraft" in script.text
     assert "applyStoredTicketDraft" in script.text
     assert "maxTicketNotional" in script.text

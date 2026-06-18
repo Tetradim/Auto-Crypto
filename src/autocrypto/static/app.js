@@ -88,6 +88,7 @@ const appState = {
   selectedPair: "BTCUSDT",
   timeframe: "15m",
   deskTable: "positions",
+  deskSearch: "",
   runtimeFilter: "all",
   strategyFilter: "all",
   strategySearch: "",
@@ -334,6 +335,37 @@ function orderDeskRow(order) {
   `;
 }
 
+function deskRowMatches(type, row) {
+  const needle = appState.deskSearch.trim().toLowerCase();
+  if (!needle) return true;
+
+  if (type === "orders") {
+    return [
+      row.created_at,
+      row.order_id,
+      row.signal_id,
+      row.symbol,
+      compactSymbol(row.symbol),
+      row.side,
+      row.notional,
+      row.price || "market",
+      row.status,
+    ].some((value) => String(value || "").toLowerCase().includes(needle));
+  }
+
+  const mark = currentMarkPrice(compactSymbol(row.symbol));
+  const unrealized = Number(row.quantity || 0) * (mark - Number(row.avg_entry || 0));
+  return [
+    row.symbol,
+    compactSymbol(row.symbol),
+    row.quantity,
+    row.avg_entry,
+    row.realized_pnl,
+    mark,
+    unrealized,
+  ].some((value) => String(value || "").toLowerCase().includes(needle));
+}
+
 function renderSignals() {
   const approvals = appState.data?.approvals || [];
   $("#approvalCount").textContent = String(approvals.length);
@@ -520,16 +552,18 @@ function renderOrderBook(mid) {
 function renderDeskTable() {
   if (appState.deskTable === "orders") {
     $("#deskTableHead").innerHTML = `<tr><th>Time</th><th>Order</th><th>Pair</th><th>Side</th><th>Notional</th><th>Price</th><th>Status</th><th>Action</th></tr>`;
-    const orders = appState.data?.orders || [];
+    const allOrders = appState.data?.orders || [];
+    const orders = allOrders.filter((order) => deskRowMatches("orders", order));
     $("#deskTableBody").innerHTML =
       orders.length > 0
         ? orders.slice(-12).reverse().map(orderDeskRow).join("")
-        : `<tr><td colspan="8">No orders submitted yet.</td></tr>`;
+        : `<tr><td colspan="8">${appState.deskSearch.trim() && allOrders.length > 0 ? "No orders match the current filter." : "No orders submitted yet."}</td></tr>`;
     return;
   }
 
   $("#deskTableHead").innerHTML = `<tr><th>Pair</th><th>Quantity</th><th>Average Entry</th><th>Realized P&L</th><th>Unrealized</th><th>Mark</th><th>Action</th></tr>`;
-  const positions = appState.data?.positions || [];
+  const allPositions = appState.data?.positions || [];
+  const positions = allPositions.filter((position) => deskRowMatches("positions", position));
   $("#deskTableBody").innerHTML =
     positions.length > 0
       ? positions.map((position) => {
@@ -562,7 +596,7 @@ function renderDeskTable() {
           </tr>
         `;
       }).join("")
-      : `<tr><td colspan="7">No open positions. Submit a paper buy with a price to create one.</td></tr>`;
+      : `<tr><td colspan="7">${appState.deskSearch.trim() && allPositions.length > 0 ? "No positions match the current filter." : "No open positions. Submit a paper buy with a price to create one."}</td></tr>`;
 }
 
 function renderStrategies() {
@@ -1559,6 +1593,10 @@ function bindEvents() {
   $("#exchangeSearch").addEventListener("input", renderExchanges);
   $("#auditSearch").addEventListener("input", renderAudit);
   $("#signalSearch").addEventListener("input", renderSignalHistory);
+  $("#deskSearch").addEventListener("input", (event) => {
+    appState.deskSearch = event.target.value;
+    renderDeskTable();
+  });
   $("#bitunixTickerButton").addEventListener("click", () => loadBitunixTickers().catch((error) => {
     $("#bitunixView").textContent = JSON.stringify({ error: error.message }, null, 2);
     setStatus(`Bitunix ticker check failed: ${error.message}`, "error");
