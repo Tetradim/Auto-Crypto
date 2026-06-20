@@ -249,6 +249,7 @@ def _signal_to_dict(signal: CryptoSignal) -> dict[str, Any]:
         "breakeven_trigger_pct": str(signal.breakeven_trigger_pct)
         if signal.breakeven_trigger_pct is not None
         else None,
+        "breakeven_after_take_profit": signal.breakeven_after_take_profit,
         "leverage": str(signal.leverage),
         "max_slippage_bps": signal.max_slippage_bps,
         "reduce_only": signal.reduce_only,
@@ -296,6 +297,7 @@ def _pending_summary(signal: CryptoSignal, *, created_at: str | None = None) -> 
         "breakeven_trigger_pct": str(signal.breakeven_trigger_pct)
         if signal.breakeven_trigger_pct is not None
         else None,
+        "breakeven_after_take_profit": signal.breakeven_after_take_profit,
         "strategy_id": signal.strategy_id,
         "reduce_only": signal.reduce_only,
         "created_at": created_at,

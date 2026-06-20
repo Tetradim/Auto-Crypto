@@ -209,6 +209,8 @@ def _active_exits_snapshot(lots: list) -> list[dict]:
             "trailing_activated": lot.trailing_activated if exit_order.kind == "trailing_stop" else None,
             "high_water_mark": str(lot.high_water_mark) if exit_order.kind == "trailing_stop" and lot.high_water_mark else None,
             "low_water_mark": str(lot.low_water_mark) if exit_order.kind == "trailing_stop" and lot.low_water_mark else None,
+            "breakeven_after_take_profit": lot.breakeven_after_take_profit,
+            "breakeven_applied": lot.breakeven_applied,
             "remaining_quantity": str(lot.remaining_quantity),
         }
         for lot in sorted(lots, key=lambda item: (item.symbol, item.signal_id))

@@ -52,6 +52,7 @@ class PaperLot:
     high_water_mark: Decimal | None = None
     low_water_mark: Decimal | None = None
     breakeven_trigger_pct: Decimal | None = None
+    breakeven_after_take_profit: bool = False
     breakeven_applied: bool = False
     entry_fee_remaining: Decimal = Decimal("0")
 
@@ -124,6 +125,7 @@ class PaperOrder:
     trailing_activation_pct: Decimal | None = None
     trailing_activation_price: Decimal | None = None
     breakeven_trigger_pct: Decimal | None = None
+    breakeven_after_take_profit: bool = False
     exit_kind: str | None = None
     canceled_exit_orders: list[ExitOrder] = field(default_factory=list)
     reduce_only: bool = False
@@ -167,6 +169,7 @@ class PaperOrder:
             "breakeven_trigger_pct": str(self.breakeven_trigger_pct)
             if self.breakeven_trigger_pct is not None
             else None,
+            "breakeven_after_take_profit": self.breakeven_after_take_profit,
             "exit_kind": self.exit_kind,
             "canceled_exit_orders": [
                 {
@@ -251,6 +254,7 @@ class PaperExchange:
             trailing_activation_pct=signal.trailing_activation_pct,
             trailing_activation_price=signal.trailing_activation_price,
             breakeven_trigger_pct=signal.breakeven_trigger_pct,
+            breakeven_after_take_profit=signal.breakeven_after_take_profit,
             reduce_only=signal.reduce_only,
             fee=fee,
             fee_bps=self.costs.fee_bps,
@@ -299,6 +303,9 @@ class PaperExchange:
                 self._close_lot(lot, fill_price, exit_quantity, exit_fee)
                 if exit_order.kind == "take_profit" and lot.remaining_quantity > 0:
                     lot.exit_orders = [order for order in lot.exit_orders if order is not exit_order]
+                    breakeven_amended = self._apply_take_profit_breakeven(lot)
+                else:
+                    breakeven_amended = False
                 canceled_exit_orders = self._canceled_sibling_exits(lot, exit_order)
                 if lot.remaining_quantity <= 0:
                     lot.exit_orders = []
@@ -330,6 +337,8 @@ class PaperExchange:
                 if self.costs.fee_bps > 0 or self.costs.slippage_bps > 0:
                     trigger_payload["mark_price"] = _fixed8(price)
                     trigger_payload["fee"] = _fixed8(exit_fee)
+                if breakeven_amended:
+                    trigger_payload["breakeven_after_take_profit"] = "true"
                 triggered.append(trigger_payload)
                 if exit_order.kind != "take_profit":
                     break
@@ -645,6 +654,7 @@ class PaperExchange:
                     and _trailing_starts_activated(signal.trailing_activation_pct, signal.trailing_activation_price)
                     else None,
                     breakeven_trigger_pct=signal.breakeven_trigger_pct,
+                    breakeven_after_take_profit=signal.breakeven_after_take_profit,
                     entry_fee_remaining=fee,
                 )
             )
@@ -675,6 +685,7 @@ class PaperExchange:
                     and _trailing_starts_activated(signal.trailing_activation_pct, signal.trailing_activation_price)
                     else None,
                     breakeven_trigger_pct=signal.breakeven_trigger_pct,
+                    breakeven_after_take_profit=signal.breakeven_after_take_profit,
                     entry_fee_remaining=fee,
                 )
             )
@@ -726,6 +737,7 @@ class PaperExchange:
                     and _trailing_starts_activated(order.trailing_activation_pct, order.trailing_activation_price)
                     else None,
                     breakeven_trigger_pct=order.breakeven_trigger_pct,
+                    breakeven_after_take_profit=order.breakeven_after_take_profit,
                     entry_fee_remaining=order.fee,
                 )
             )
@@ -756,6 +768,7 @@ class PaperExchange:
                     and _trailing_starts_activated(order.trailing_activation_pct, order.trailing_activation_price)
                     else None,
                     breakeven_trigger_pct=order.breakeven_trigger_pct,
+                    breakeven_after_take_profit=order.breakeven_after_take_profit,
                     entry_fee_remaining=order.fee,
                 )
             )
@@ -927,6 +940,19 @@ class PaperExchange:
             for exit_order in lot.exit_orders
         ]
         lot.breakeven_applied = True
+
+    def _apply_take_profit_breakeven(self, lot: PaperLot) -> bool:
+        if not lot.breakeven_after_take_profit or lot.breakeven_applied:
+            return False
+        updated_exit_orders, amendments = _breakeven_exit_amendments(lot)
+        if not amendments:
+            return False
+        lot.exit_orders = updated_exit_orders
+        lot.breakeven_applied = True
+        for amendment in amendments:
+            if amendment.kind == "trailing_stop":
+                _sync_trailing_water_mark(lot, amendment.trigger_price)
+        return True
 
     def _exit_quantity(self, lot: PaperLot, exit_order: ExitOrder) -> Decimal:
         if exit_order.kind != "take_profit":
@@ -1358,6 +1384,7 @@ def _paper_order_from_dict(payload: dict) -> PaperOrder:
         breakeven_trigger_pct=Decimal(str(payload["breakeven_trigger_pct"]))
         if payload.get("breakeven_trigger_pct") is not None
         else None,
+        breakeven_after_take_profit=_bool_from_payload(payload.get("breakeven_after_take_profit")),
         exit_kind=payload.get("exit_kind"),
         canceled_exit_orders=[
             _exit_order_from_dict(exit_order, default_status="canceled")
@@ -1379,3 +1406,11 @@ def _exit_order_from_dict(payload: dict, *, default_status: str = "open") -> Exi
         oca_group=payload.get("oca_group"),
         status=str(payload.get("status") or default_status),
     )
+
+
+def _bool_from_payload(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None or value == "":
+        return False
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}

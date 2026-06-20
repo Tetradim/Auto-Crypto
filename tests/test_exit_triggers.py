@@ -492,6 +492,91 @@ def test_staged_take_profit_closes_partial_lot_and_keeps_protective_stop():
     ]
 
 
+def test_staged_take_profit_can_move_remaining_protective_exits_to_breakeven():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "tp-to-breakeven",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "trailing_stop_pct": "8",
+            "take_profit_targets": [
+                {"pct": "5", "close_pct": "40"},
+                {"pct": "10", "close_pct": "60"},
+            ],
+            "breakeven_after_take_profit": True,
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    first = exchange.update_price("BTC/USDT", Decimal("105"))
+    stop_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "stop_loss")
+    trailing_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    breakeven_applied = exchange.lots[0].breakeven_applied
+    second = exchange.update_price("BTC/USDT", Decimal("100"))
+
+    assert first == [
+        {
+            "symbol": "BTC/USDT",
+            "kind": "take_profit",
+            "price": "105.00000000",
+            "quantity": "0.40000000",
+            "breakeven_after_take_profit": "true",
+        }
+    ]
+    assert stop_exit.trigger_price == Decimal("100.00")
+    assert trailing_exit.trigger_price == Decimal("100.00")
+    assert breakeven_applied is True
+    assert second == [
+        {"symbol": "BTC/USDT", "kind": "stop_loss", "price": "100.00000000", "quantity": "0.60000000"}
+    ]
+
+
+def test_short_staged_take_profit_can_move_remaining_stop_to_breakeven():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "short-tp-to-breakeven",
+            "symbol": "ETH/USDT",
+            "side": "short",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_targets": [
+                {"pct": "5", "close_pct": "50"},
+                {"pct": "10", "close_pct": "50"},
+            ],
+            "breakeven_after_take_profit": True,
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    first = exchange.update_price("ETH/USDT", Decimal("95"))
+    stop_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "stop_loss")
+    second = exchange.update_price("ETH/USDT", Decimal("100"))
+
+    assert first == [
+        {
+            "symbol": "ETH/USDT",
+            "kind": "take_profit",
+            "price": "95.00000000",
+            "quantity": "0.50000000",
+            "breakeven_after_take_profit": "true",
+        }
+    ]
+    assert stop_exit.trigger_price == Decimal("100.00")
+    assert second == [
+        {"symbol": "ETH/USDT", "kind": "stop_loss", "price": "100.00000000", "quantity": "0.50000000"}
+    ]
+
+
 def test_staged_take_profit_fills_all_crossed_targets_on_one_price_mark():
     exchange = PaperExchange()
     engine = TradingEngine(exchange=exchange)

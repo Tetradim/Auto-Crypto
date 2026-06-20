@@ -865,6 +865,7 @@ def _signal_to_dict(signal: CryptoSignal) -> dict[str, Any]:
         "breakeven_trigger_pct": str(signal.breakeven_trigger_pct)
         if signal.breakeven_trigger_pct is not None
         else None,
+        "breakeven_after_take_profit": signal.breakeven_after_take_profit,
         "leverage": str(signal.leverage),
         "max_slippage_bps": signal.max_slippage_bps,
         "reduce_only": signal.reduce_only,
@@ -937,6 +938,7 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
         "trailing_activation_price": _decimal_to_plain(trailing_activation_price)
         if trailing_activation_price is not None
         else None,
+        "breakeven_after_take_profit": signal.breakeven_after_take_profit,
         "estimated_notional": _decimal_to_plain(decision.order_notional) if decision.order_notional is not None else None,
         "estimated_quantity": _decimal_to_plain(estimated_quantity) if estimated_quantity is not None else None,
         "worst_case_loss": _decimal_to_plain(worst_case_loss) if worst_case_loss is not None else None,
@@ -1066,6 +1068,7 @@ def _active_exit_to_dict(lot: Any, exit_order: Any, *, mark_price: Decimal | Non
         if distance is not None and mark_price is not None and mark_price > 0
         else None,
         "breakeven_trigger_pct": str(lot.breakeven_trigger_pct) if lot.breakeven_trigger_pct else None,
+        "breakeven_after_take_profit": str(lot.breakeven_after_take_profit).lower(),
         "breakeven_applied": str(lot.breakeven_applied).lower(),
         "signal_id": lot.signal_id,
         "remaining_quantity": str(lot.remaining_quantity),

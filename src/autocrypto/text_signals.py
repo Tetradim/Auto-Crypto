@@ -23,7 +23,7 @@ TEXT_SIGNAL_RE = re.compile(
 def parse_text_signal(message: str, *, source: str) -> CryptoSignal:
     match = TEXT_SIGNAL_RE.match(message)
     if not match:
-        raise SignalValidationError("text signal must match: BUY BTCUSDT $100 @ 50000 SL 2% TP 5% TRAIL 3% STEP 1% ACT 2% BE 2%")
+        raise SignalValidationError("text signal must match: BUY BTCUSDT $100 @ 50000 SL 2% TP 5% TRAIL 3% STEP 1% ACT 2% BE 2% BEAFTERTP")
 
     size = match.group("size")
     payload: dict[str, Any] = {
@@ -46,6 +46,11 @@ def parse_text_signal(message: str, *, source: str) -> CryptoSignal:
     trailing_step = re.search(r"\b(?:STEP|TRAILSTEP|TRAIL-STEP)\s*(\d+(?:\.\d+)?)\s*%", rest, flags=re.IGNORECASE)
     trailing_activation = re.search(r"\b(?:ACT|TRAILACT|TRAIL-ACT)\s*(\d+(?:\.\d+)?)\s*%", rest, flags=re.IGNORECASE)
     breakeven = re.search(r"\b(?:BE|BREAKEVEN|BREAK-EVEN)\s*(\d+(?:\.\d+)?)\s*%", rest, flags=re.IGNORECASE)
+    breakeven_after_take_profit = re.search(
+        r"\b(?:BEAFTERTP|BE-AFTER-TP|BREAKEVEN-AFTER-TP|MOVE-BE-AFTER-TP)\b",
+        rest,
+        flags=re.IGNORECASE,
+    )
     if stop_pct:
         payload["stop_loss_pct"] = stop_pct.group(1)
     if stop_price:
@@ -64,6 +69,8 @@ def parse_text_signal(message: str, *, source: str) -> CryptoSignal:
         payload["trailing_activation_pct"] = trailing_activation.group(1)
     if breakeven:
         payload["breakeven_trigger_pct"] = breakeven.group(1)
+    if breakeven_after_take_profit:
+        payload["breakeven_after_take_profit"] = True
 
     return normalize_signal(payload, source=source)
 

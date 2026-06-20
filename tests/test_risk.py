@@ -503,6 +503,37 @@ def test_risk_rejects_breakeven_without_protective_exit_to_move():
     assert "breakeven_requires_protective_exit" in decision.reason_codes
 
 
+def test_risk_rejects_breakeven_after_take_profit_without_target_or_protection():
+    missing_target = normalize_signal(
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "breakeven_after_take_profit": True,
+        },
+        source="test",
+    )
+    missing_protection = normalize_signal(
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "take_profit_pct": "5",
+            "breakeven_after_take_profit": True,
+        },
+        source="test",
+    )
+
+    missing_target_decision = evaluate_signal(missing_target, RiskConfig(), AccountState())
+    missing_protection_decision = evaluate_signal(missing_protection, RiskConfig(), AccountState())
+
+    assert "breakeven_after_take_profit_requires_take_profit" in missing_target_decision.reason_codes
+    assert "breakeven_requires_protective_exit" in missing_protection_decision.reason_codes
+
+
 def test_risk_rejects_invalid_or_incomplete_trailing_stop_price():
     inverted = normalize_signal(
         {
