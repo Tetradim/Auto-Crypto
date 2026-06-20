@@ -30,6 +30,7 @@ class CryptoSignal:
     base_amount: Decimal | None = None
     risk_amount: Decimal | None = None
     risk_pct: Decimal | None = None
+    volatility_pct: Decimal | None = None
     price: Decimal | None = None
     stop_loss_pct: Decimal | None = None
     stop_loss_price: Decimal | None = None
@@ -83,6 +84,12 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
     base_amount = _optional_positive_decimal(payload.get("base_amount") or payload.get("quantity") or payload.get("qty"))
     risk_amount = _optional_positive_decimal(payload.get("risk_amount") or payload.get("risk_quote_amount"))
     risk_pct = _optional_positive_decimal(payload.get("risk_pct") or payload.get("risk_percent"))
+    volatility_pct = _optional_positive_decimal(
+        payload.get("volatility_pct")
+        or payload.get("realized_volatility_pct")
+        or payload.get("atr_pct")
+        or payload.get("atr_percent")
+    )
 
     if quote_amount is None and base_amount is None and risk_amount is None and risk_pct is None:
         raise SignalValidationError("signal requires quote_amount, base_amount, risk_amount, or risk_pct")
@@ -141,6 +148,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         "base_amount": str(base_amount) if base_amount is not None else None,
         "risk_amount": str(risk_amount) if risk_amount is not None else None,
         "risk_pct": str(risk_pct) if risk_pct is not None else None,
+        "volatility_pct": str(volatility_pct) if volatility_pct is not None else None,
         "price": str(price) if price is not None else None,
         "stop_loss_pct": str(stop_loss_pct) if stop_loss_pct is not None else None,
         "stop_loss_price": str(stop_loss_price) if stop_loss_price is not None else None,
@@ -185,6 +193,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         base_amount=base_amount,
         risk_amount=risk_amount,
         risk_pct=risk_pct,
+        volatility_pct=volatility_pct,
         price=price,
         stop_loss_pct=stop_loss_pct,
         stop_loss_price=stop_loss_price,

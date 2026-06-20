@@ -286,6 +286,12 @@ class PaperExchange:
             Decimal("0"),
         )
 
+    def symbol_open_notional(self, symbol: str) -> Decimal:
+        position = self.positions.get(symbol)
+        if position is None:
+            return Decimal("0")
+        return abs(position.quantity) * position.avg_entry
+
     def update_price(self, symbol: str, price: Decimal) -> list[dict]:
         position = self.positions.get(symbol)
         if position is None or position.quantity == 0:
@@ -1511,7 +1517,7 @@ def _nearest_protective_exit(lot: PaperLot) -> ExitOrder | None:
     protective_exits = [
         exit_order
         for exit_order in lot.exit_orders
-        if exit_order.kind in {"stop_loss", "trailing_stop"} and exit_order.status != "canceled"
+        if exit_order.kind in {"stop_loss", "trailing_stop"} and exit_order.status == "open"
     ]
     if lot.direction == "long":
         return max(protective_exits, key=lambda item: item.trigger_price, default=None)

@@ -69,6 +69,37 @@ class BacktestSummary:
         }
 
 
+@dataclass(frozen=True)
+class StressScenarioResult:
+    name: str
+    summary: BacktestSummary
+
+    def to_dict(self) -> dict:
+        payload = self.summary.to_dict()
+        payload["name"] = self.name
+        return payload
+
+
+@dataclass(frozen=True)
+class StressBacktestSummary:
+    scenarios: list[StressScenarioResult]
+
+    def to_dict(self) -> dict:
+        accepted = [scenario for scenario in self.scenarios if scenario.summary.accepted]
+        worst_final_pnl = min((scenario.summary.final_daily_pnl for scenario in accepted), default=Decimal("0"))
+        worst_drawdown = max((scenario.summary.max_drawdown for scenario in accepted), default=Decimal("0"))
+        total_triggers = sum(scenario.summary.total_triggers for scenario in accepted)
+        return {
+            "scenario_count": len(self.scenarios),
+            "accepted_count": len(accepted),
+            "rejected_count": len(self.scenarios) - len(accepted),
+            "worst_final_daily_pnl": str(worst_final_pnl),
+            "worst_max_drawdown": str(worst_drawdown),
+            "total_triggers": total_triggers,
+            "scenarios": [scenario.to_dict() for scenario in self.scenarios],
+        }
+
+
 def run_signal_backtest(
     engine: TradingEngine,
     signal: CryptoSignal,
@@ -103,6 +134,24 @@ def run_signal_candle_backtest(
     return _run_backtest_path(engine, signal, path, costs=costs)
 
 
+def run_signal_stress_backtest(
+    engine: TradingEngine,
+    signal: CryptoSignal,
+    scenarios: list[dict],
+) -> StressBacktestSummary:
+    """Replay one signal across named stress paths and cost assumptions."""
+    results: list[StressScenarioResult] = []
+    for index, scenario in enumerate(scenarios, start=1):
+        name = str(scenario.get("name") or f"scenario-{index}")
+        costs = scenario.get("costs")
+        if "candles" in scenario:
+            summary = run_signal_candle_backtest(engine, signal, scenario["candles"], costs=costs)
+        else:
+            summary = run_signal_backtest(engine, signal, scenario["prices"], costs=costs)
+        results.append(StressScenarioResult(name=name, summary=summary))
+    return StressBacktestSummary(scenarios=results)
+
+
 def _run_backtest_path(
     engine: TradingEngine,
     signal: CryptoSignal,
@@ -118,6 +167,7 @@ def _run_backtest_path(
             equity=engine.account_state.equity,
             daily_pnl=engine.account_state.daily_pnl,
             open_notional=engine.account_state.open_notional,
+            symbol_open_notional=engine.account_state.symbol_open_notional,
             consecutive_losses=engine.account_state.consecutive_losses,
         ),
     )

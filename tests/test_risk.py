@@ -174,6 +174,51 @@ def test_risk_rejects_buy_that_would_exceed_max_open_notional():
     assert "max_open_notional_exceeded" in decision.reason_codes
 
 
+def test_risk_rejects_buy_that_would_exceed_symbol_concentration_cap():
+    signal = normalize_signal(
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "75",
+            "price": "50000",
+            "stop_loss_pct": "2",
+        },
+        source="test",
+    )
+
+    decision = evaluate_signal(
+        signal,
+        RiskConfig(max_symbol_open_notional=Decimal("100")),
+        AccountState(symbol_open_notional=Decimal("50")),
+    )
+
+    assert decision.approved is False
+    assert "max_symbol_open_notional_exceeded" in decision.reason_codes
+
+
+def test_risk_rejects_entries_when_volatility_regime_exceeds_cap():
+    signal = normalize_signal(
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "50000",
+            "stop_loss_pct": "2",
+            "volatility_pct": "7.5",
+        },
+        source="test",
+    )
+
+    decision = evaluate_signal(
+        signal,
+        RiskConfig(max_entry_volatility_pct=Decimal("5")),
+        AccountState(),
+    )
+
+    assert decision.approved is False
+    assert "max_entry_volatility_pct_exceeded" in decision.reason_codes
+
+
 def test_risk_treats_bracketed_sell_as_position_opening_short():
     signal = normalize_signal(
         {

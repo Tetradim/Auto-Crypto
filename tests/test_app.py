@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from autocrypto.app import create_app
+from autocrypto.risk import RiskConfig
 
 
 def test_webhook_test_mode_returns_paper_order_without_live_execution():
@@ -394,6 +395,71 @@ def test_backtest_candles_use_conservative_adverse_first_path_and_report_excursi
     assert positions_after.json()["positions"] == []
 
 
+def test_backtest_stress_runs_named_price_and_cost_scenarios():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/backtest/stress",
+        json={
+            "signal": {
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "10",
+            },
+            "scenarios": [
+                {"name": "calm-target", "prices": ["104", "110"]},
+                {"name": "fee-shock", "prices": ["110"], "costs": {"fee_bps": "100", "slippage_bps": "0"}},
+            ],
+        },
+    )
+    positions_after = client.get("/positions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scenario_count"] == 2
+    assert body["accepted_count"] == 2
+    assert body["worst_final_daily_pnl"] == "7.90"
+    assert body["total_triggers"] == 2
+    assert [scenario["name"] for scenario in body["scenarios"]] == ["calm-target", "fee-shock"]
+    assert positions_after.json()["positions"] == []
+
+
+def test_symbol_concentration_cap_uses_current_paper_position():
+    app = create_app(risk_config=RiskConfig(max_order_notional=1000, max_symbol_open_notional=150))
+    client = TestClient(app)
+
+    first = client.post(
+        "/webhooks/tradingview",
+        json={
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+        },
+    )
+    second = client.post(
+        "/webhooks/tradingview",
+        json={
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "60",
+            "price": "100",
+            "stop_loss_pct": "5",
+        },
+    )
+
+    assert first.status_code == 200
+    assert first.json()["status"] == "accepted"
+    assert second.status_code == 200
+    assert second.json()["status"] == "rejected"
+    assert "max_symbol_open_notional_exceeded" in second.json()["risk"]["reason_codes"]
+
+
 def test_bracket_summary_reports_protective_distance_and_locked_pnl_after_tighten():
     app = create_app()
     client = TestClient(app)
@@ -450,3 +516,55 @@ def test_bracket_summary_reports_total_target_reward_for_staged_targets():
     assert summary["first_target_reward_risk_ratio"] == "0.5"
     assert summary["total_target_reward"] == "7.500"
     assert summary["total_target_reward_risk_ratio"] == "1.5"
+
+
+def test_bracket_risk_summary_aggregates_long_short_and_trailing_counts():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "summary-long",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "trailing_stop_pct": "4",
+            "trailing_activation_pct": "2",
+        },
+    )
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "summary-short",
+            "symbol": "ETHUSDT",
+            "side": "short",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "take_profit_pct": "20",
+            "max_hold_marks": 2,
+        },
+    )
+
+    response = client.get("/brackets/risk-summary")
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["bracket_count"] == 2
+    assert summary["exit_count"] == 6
+    assert summary["trailing_stop_count"] == 1
+    assert summary["pending_trailing_stop_count"] == 1
+    assert summary["time_stop_count"] == 1
+    assert summary["totals"] == {
+        "bracket_count": 2,
+        "remaining_notional": "200",
+        "worst_case_loss": "15.00",
+        "protective_locked_pnl": "-15.00",
+        "first_target_reward": "30.00",
+        "total_target_reward": "30.00",
+    }
+    assert [row["symbol"] for row in summary["by_symbol"]] == ["BTC/USDT", "ETH/USDT"]

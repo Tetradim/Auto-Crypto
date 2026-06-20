@@ -47,6 +47,8 @@ class TradingEngine:
         self.halt_reason = ""
 
     def process_signal(self, signal: CryptoSignal) -> ExecutionResult:
+        self.account_state.open_notional = self.exchange.open_notional()
+        self.account_state.symbol_open_notional = self.exchange.symbol_open_notional(signal.symbol)
         if self.halted:
             decision = evaluate_signal(signal, self.risk_config, self.account_state)
             return ExecutionResult(status="halted", decision=decision, reason=self.halt_reason or "trading_halted")
@@ -74,6 +76,7 @@ class TradingEngine:
             elif realized_pnl_delta > 0:
                 self.account_state.consecutive_losses = 0
         self.account_state.open_notional = self.exchange.open_notional()
+        self.account_state.symbol_open_notional = self.exchange.symbol_open_notional(symbol)
         return MarketPriceUpdate(
             symbol=symbol,
             price=price,

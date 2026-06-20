@@ -10,8 +10,10 @@ from .signals import CryptoSignal
 class RiskConfig:
     max_order_notional: Decimal = Decimal("1000")
     max_open_notional: Decimal = Decimal("0")
+    max_symbol_open_notional: Decimal = Decimal("0")
     max_position_equity_pct: Decimal = Decimal("0")
     max_risk_per_trade_pct: Decimal = Decimal("0")
+    max_entry_volatility_pct: Decimal = Decimal("0")
     max_leverage: Decimal = Decimal("1")
     max_daily_loss: Decimal = Decimal("500")
     max_consecutive_losses: int = 0
@@ -32,6 +34,7 @@ class AccountState:
     equity: Decimal = Decimal("10000")
     daily_pnl: Decimal = Decimal("0")
     open_notional: Decimal = Decimal("0")
+    symbol_open_notional: Decimal = Decimal("0")
     consecutive_losses: int = 0
 
 
@@ -78,6 +81,13 @@ def evaluate_signal(
     ):
         reasons.append("max_open_notional_exceeded")
     if (
+        opens_position
+        and order_notional is not None
+        and config.max_symbol_open_notional > 0
+        and account_state.symbol_open_notional + order_notional > config.max_symbol_open_notional
+    ):
+        reasons.append("max_symbol_open_notional_exceeded")
+    if (
         order_notional is not None
         and config.max_position_equity_pct > 0
         and account_state.equity > 0
@@ -90,6 +100,12 @@ def evaluate_signal(
         and signal.risk_pct > config.max_risk_per_trade_pct
     ):
         reasons.append("max_risk_per_trade_pct_exceeded")
+    if (
+        signal.volatility_pct is not None
+        and config.max_entry_volatility_pct > 0
+        and signal.volatility_pct > config.max_entry_volatility_pct
+    ):
+        reasons.append("max_entry_volatility_pct_exceeded")
     if config.max_leverage > 0 and signal.leverage > config.max_leverage:
         reasons.append("max_leverage_exceeded")
     if config.max_daily_loss > 0 and account_state.daily_pnl <= -config.max_daily_loss:

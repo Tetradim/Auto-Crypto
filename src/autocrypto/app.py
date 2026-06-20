@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .approvals import ApprovalQueue
-from .backtest import run_signal_backtest, run_signal_candle_backtest
+from .backtest import run_signal_backtest, run_signal_candle_backtest, run_signal_stress_backtest
 from .bot_event_bus import BotEvent, event_bus
 from .config import load_settings
 from .edge_actions import apply_edge_action
@@ -352,6 +352,10 @@ def create_app(
     @app.get("/brackets")
     def list_brackets() -> dict[str, Any]:
         return {"brackets": _active_brackets_to_dict(engine.exchange.lots)}
+
+    @app.get("/brackets/risk-summary")
+    def bracket_risk_summary() -> dict[str, Any]:
+        return {"summary": _bracket_risk_summary(engine.exchange.lots)}
 
     @app.get("/brackets/{signal_id}")
     def bracket_status(signal_id: str) -> dict[str, Any]:
@@ -853,6 +857,20 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return run_signal_backtest(engine, signal, prices, costs=costs).to_dict()
 
+    @app.post("/backtest/stress")
+    async def backtest_stress(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        signal_payload = payload.get("signal") if isinstance(payload.get("signal"), dict) else payload
+        scenarios_payload = payload.get("scenarios")
+        if not isinstance(scenarios_payload, list) or not scenarios_payload:
+            raise HTTPException(status_code=400, detail="scenarios must be a non-empty list")
+        try:
+            signal = normalize_signal(signal_payload, source="operator-stress-backtest")
+            scenarios = [_stress_scenario_payload(scenario) for scenario in scenarios_payload]
+        except (SignalValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return run_signal_stress_backtest(engine, signal, scenarios).to_dict()
+
     @app.get("/audit")
     def audit() -> dict[str, Any]:
         return {"events": [event.to_dict() for event in repository.list_audit()] if repository else []}
@@ -923,6 +941,32 @@ def _candle_payload(value: Any) -> dict[str, Decimal]:
         "high": high,
         "low": low,
         "close": _positive_decimal(value.get("close")),
+    }
+
+
+def _stress_scenario_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("scenario entries must be objects")
+    marks_payload = value.get("prices") or value.get("marks") or []
+    candles_payload = value.get("candles") or []
+    if candles_payload and marks_payload:
+        raise ValueError("scenario must send either prices or candles, not both")
+    if candles_payload:
+        if not isinstance(candles_payload, list):
+            raise ValueError("scenario candles must be a list")
+        path = {"candles": [_candle_payload(candle) for candle in candles_payload]}
+    else:
+        if not isinstance(marks_payload, list) or not marks_payload:
+            raise ValueError("scenario prices or candles must be a non-empty list")
+        path = {"prices": [_positive_decimal(price) for price in marks_payload]}
+    costs_payload = value.get("costs") if isinstance(value.get("costs"), dict) else value
+    return {
+        "name": str(value.get("name") or value.get("label") or "scenario"),
+        **path,
+        "costs": ExecutionCostConfig(
+            fee_bps=_non_negative_decimal(costs_payload.get("fee_bps"), default=Decimal("0")),
+            slippage_bps=_non_negative_decimal(costs_payload.get("slippage_bps"), default=Decimal("0")),
+        ),
     }
 
 
@@ -997,13 +1041,14 @@ def _bitunix_exchange_row() -> dict[str, Any]:
         "live_execution_enabled": bitunix_live_execution_enabled(),
     }
 
-
 def _risk_config_to_dict(config: RiskConfig) -> dict[str, Any]:
     return {
         "max_order_notional": str(config.max_order_notional),
         "max_open_notional": str(config.max_open_notional),
+        "max_symbol_open_notional": str(config.max_symbol_open_notional),
         "max_position_equity_pct": str(config.max_position_equity_pct),
         "max_risk_per_trade_pct": str(config.max_risk_per_trade_pct),
+        "max_entry_volatility_pct": str(config.max_entry_volatility_pct),
         "max_leverage": str(config.max_leverage),
         "max_daily_loss": str(config.max_daily_loss),
         "max_consecutive_losses": config.max_consecutive_losses,
@@ -1025,6 +1070,7 @@ def _account_state_to_dict(account_state: AccountState) -> dict[str, Any]:
         "equity": str(account_state.equity),
         "daily_pnl": str(account_state.daily_pnl),
         "open_notional": str(account_state.open_notional),
+        "symbol_open_notional": str(account_state.symbol_open_notional),
         "consecutive_losses": account_state.consecutive_losses,
     }
 
@@ -1041,6 +1087,7 @@ def _signal_to_dict(signal: CryptoSignal) -> dict[str, Any]:
         "base_amount": str(signal.base_amount) if signal.base_amount is not None else None,
         "risk_amount": str(signal.risk_amount) if signal.risk_amount is not None else None,
         "risk_pct": str(signal.risk_pct) if signal.risk_pct is not None else None,
+        "volatility_pct": str(signal.volatility_pct) if signal.volatility_pct is not None else None,
         "price": str(signal.price) if signal.price is not None else None,
         "stop_loss_pct": str(signal.stop_loss_pct) if signal.stop_loss_pct is not None else None,
         "stop_loss_price": str(signal.stop_loss_price) if signal.stop_loss_price is not None else None,
@@ -1348,6 +1395,73 @@ def _active_brackets_to_dict(lots: list[Any]) -> list[dict[str, Any]]:
     return brackets
 
 
+def _bracket_risk_summary(lots: list[Any]) -> dict[str, Any]:
+    active_lots = [lot for lot in lots if lot.remaining_quantity > 0 and lot.exit_orders]
+    by_symbol: dict[str, dict[str, Any]] = {}
+    totals = _empty_bracket_totals()
+    for lot in active_lots:
+        summary = _bracket_summary(lot)
+        _accumulate_bracket_totals(totals, lot, summary)
+        symbol_totals = by_symbol.setdefault(lot.symbol, _empty_bracket_totals(symbol=lot.symbol))
+        _accumulate_bracket_totals(symbol_totals, lot, summary)
+
+    return {
+        "bracket_count": len(active_lots),
+        "exit_count": sum(len(lot.exit_orders) for lot in active_lots),
+        "trailing_stop_count": sum(
+            1 for lot in active_lots for exit_order in lot.exit_orders if exit_order.kind == "trailing_stop"
+        ),
+        "pending_trailing_stop_count": sum(
+            1
+            for lot in active_lots
+            for exit_order in lot.exit_orders
+            if exit_order.kind == "trailing_stop" and exit_order.status == "pending_activation"
+        ),
+        "time_stop_count": sum(1 for lot in active_lots for exit_order in lot.exit_orders if exit_order.kind == "time_exit"),
+        "totals": _bracket_totals_to_dict(totals),
+        "by_symbol": [_bracket_totals_to_dict(by_symbol[symbol]) for symbol in sorted(by_symbol)],
+    }
+
+
+def _empty_bracket_totals(*, symbol: str | None = None) -> dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "bracket_count": 0,
+        "remaining_notional": Decimal("0"),
+        "worst_case_loss": Decimal("0"),
+        "protective_locked_pnl": Decimal("0"),
+        "first_target_reward": Decimal("0"),
+        "total_target_reward": Decimal("0"),
+    }
+
+
+def _accumulate_bracket_totals(totals: dict[str, Any], lot: Any, summary: dict[str, str | None]) -> None:
+    totals["bracket_count"] += 1
+    totals["remaining_notional"] += lot.remaining_quantity * lot.entry_price
+    totals["worst_case_loss"] += _decimal_or_zero(summary["worst_case_loss"])
+    totals["protective_locked_pnl"] += _decimal_or_zero(summary["protective_locked_pnl"])
+    totals["first_target_reward"] += _decimal_or_zero(summary["first_target_reward"])
+    totals["total_target_reward"] += _decimal_or_zero(summary["total_target_reward"])
+
+
+def _bracket_totals_to_dict(totals: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "bracket_count": totals["bracket_count"],
+        "remaining_notional": _decimal_to_plain(totals["remaining_notional"]),
+        "worst_case_loss": _decimal_to_plain(totals["worst_case_loss"]),
+        "protective_locked_pnl": _decimal_to_plain(totals["protective_locked_pnl"]),
+        "first_target_reward": _decimal_to_plain(totals["first_target_reward"]),
+        "total_target_reward": _decimal_to_plain(totals["total_target_reward"]),
+    }
+    if totals["symbol"] is not None:
+        payload["symbol"] = totals["symbol"]
+    return payload
+
+
+def _decimal_or_zero(value: str | None) -> Decimal:
+    return Decimal(value) if value is not None else Decimal("0")
+
+
 def _bracket_summary(lot: Any) -> dict[str, str | None]:
     remaining_notional = lot.remaining_quantity * lot.entry_price
     protective_exit = _nearest_protective_exit(lot)
@@ -1384,7 +1498,7 @@ def _nearest_protective_exit(lot: Any) -> Any | None:
     protective_exits = [
         exit_order
         for exit_order in lot.exit_orders
-        if exit_order.kind in {"stop_loss", "trailing_stop"} and exit_order.status != "canceled"
+        if exit_order.kind in {"stop_loss", "trailing_stop"} and exit_order.status == "open"
     ]
     if lot.direction == "long":
         return max(protective_exits, key=lambda item: item.trigger_price, default=None)

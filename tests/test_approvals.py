@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from fastapi.testclient import TestClient
 
 from autocrypto.app import create_app
@@ -89,6 +91,42 @@ def test_pending_approval_survives_restart_and_can_be_approved(tmp_path):
     assert approved.status_code == 200
     assert approved.json()["status"] == "accepted"
     assert SQLiteRepository(db_path).list_orders()[0]["signal_id"] == "restart-approval"
+
+
+def test_pending_approval_preserves_risk_sizing_and_time_stop_after_restart(tmp_path):
+    db_path = tmp_path / "approval_restart_risk_sized.sqlite3"
+    first_client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    response = first_client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "restart-risk-sized",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "risk_pct": "0.2",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "max_hold_marks": 3,
+        },
+    )
+
+    second_client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    pending = second_client.get("/approvals").json()["pending"][0]
+    approved = second_client.post("/approvals/restart-risk-sized/approve")
+
+    assert response.json()["status"] == "approval_required"
+    assert pending["risk_pct"] == "0.2"
+    assert pending["max_hold_marks"] == 3
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "accepted"
+    order = SQLiteRepository(db_path).list_orders()[0]
+    assert Decimal(order["notional"]) == Decimal("400")
+    assert order["max_hold_marks"] == 3
+    assert [exit_order["kind"] for exit_order in order["exit_orders"]] == [
+        "stop_loss",
+        "take_profit",
+        "time_exit",
+    ]
 
 
 def test_approval_attempt_during_halt_keeps_signal_pending_until_resume(tmp_path):

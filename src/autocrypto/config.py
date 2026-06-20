@@ -34,8 +34,10 @@ def load_settings() -> AppSettings:
         risk=RiskConfig(
             max_order_notional=Decimal(os.getenv("AUTO_CRYPTO_MAX_ORDER_NOTIONAL", "1000")),
             max_open_notional=Decimal(os.getenv("AUTO_CRYPTO_MAX_OPEN_NOTIONAL", "0")),
+            max_symbol_open_notional=Decimal(os.getenv("AUTO_CRYPTO_MAX_SYMBOL_OPEN_NOTIONAL", "0")),
             max_position_equity_pct=Decimal(os.getenv("AUTO_CRYPTO_MAX_POSITION_EQUITY_PCT", "0")),
             max_risk_per_trade_pct=Decimal(os.getenv("AUTO_CRYPTO_MAX_RISK_PER_TRADE_PCT", "0")),
+            max_entry_volatility_pct=Decimal(os.getenv("AUTO_CRYPTO_MAX_ENTRY_VOLATILITY_PCT", "0")),
             max_leverage=Decimal(os.getenv("AUTO_CRYPTO_MAX_LEVERAGE", "1")),
             max_daily_loss=Decimal(os.getenv("AUTO_CRYPTO_MAX_DAILY_LOSS", "500")),
             max_consecutive_losses=int(os.getenv("AUTO_CRYPTO_MAX_CONSECUTIVE_LOSSES", "0")),
