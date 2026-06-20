@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .approvals import ApprovalQueue
-from .backtest import run_signal_backtest
+from .backtest import run_signal_backtest, run_signal_candle_backtest
 from .bot_event_bus import BotEvent, event_bus
 from .config import load_settings
 from .edge_actions import apply_edge_action
@@ -618,10 +618,18 @@ def create_app(
         payload = await request.json()
         signal_payload = payload.get("signal") if isinstance(payload.get("signal"), dict) else payload
         marks_payload = payload.get("prices") or payload.get("marks") or []
-        if not isinstance(marks_payload, list) or not marks_payload:
-            raise HTTPException(status_code=400, detail="prices must be a non-empty list")
+        candles_payload = payload.get("candles") or []
+        if candles_payload and marks_payload:
+            raise HTTPException(status_code=400, detail="send either prices or candles, not both")
+        if candles_payload and not isinstance(candles_payload, list):
+            raise HTTPException(status_code=400, detail="candles must be a non-empty list")
+        if not candles_payload and (not isinstance(marks_payload, list) or not marks_payload):
+            raise HTTPException(status_code=400, detail="prices or candles must be a non-empty list")
         try:
             signal = normalize_signal(signal_payload, source="operator-backtest")
+            if candles_payload:
+                candles = [_candle_payload(candle) for candle in candles_payload]
+                return run_signal_candle_backtest(engine, signal, candles).to_dict()
             prices = [_positive_decimal(price) for price in marks_payload]
         except (SignalValidationError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -659,6 +667,21 @@ def _positive_decimal(value: Any) -> Decimal:
     if parsed <= 0:
         raise ValueError("price must be positive")
     return parsed
+
+
+def _candle_payload(value: Any) -> dict[str, Decimal]:
+    if not isinstance(value, dict):
+        raise ValueError("candles entries must be objects")
+    high = _positive_decimal(value.get("high"))
+    low = _positive_decimal(value.get("low"))
+    if low > high:
+        raise ValueError("candle low cannot exceed high")
+    return {
+        "label": value.get("label") or value.get("time") or value.get("timestamp"),
+        "high": high,
+        "low": low,
+        "close": _positive_decimal(value.get("close")),
+    }
 
 
 def _paper_capabilities() -> ExchangeCapabilities:
@@ -971,12 +994,20 @@ def _bracket_summary(lot: Any) -> dict[str, str | None]:
     protective_exit = _nearest_protective_exit(lot)
     first_target = _nearest_take_profit_exit(lot)
     worst_case_loss = _lot_protective_loss(lot, protective_exit)
+    protective_locked_pnl = _lot_protective_locked_pnl(lot, protective_exit)
+    protective_distance_pct = _lot_protective_distance_pct(lot, protective_exit)
     first_target_reward = _lot_target_reward(lot, first_target)
     return {
         "remaining_notional": _decimal_to_plain(remaining_notional),
         "protective_exit_kind": protective_exit.kind if protective_exit is not None else None,
         "protective_trigger_price": str(protective_exit.trigger_price) if protective_exit is not None else None,
+        "protective_distance_pct": _decimal_to_plain(protective_distance_pct)
+        if protective_distance_pct is not None
+        else None,
         "worst_case_loss": _decimal_to_plain(worst_case_loss) if worst_case_loss is not None else None,
+        "protective_locked_pnl": _decimal_to_plain(protective_locked_pnl)
+        if protective_locked_pnl is not None
+        else None,
         "first_target_price": str(first_target.trigger_price) if first_target is not None else None,
         "first_target_reward": _decimal_to_plain(first_target_reward) if first_target_reward is not None else None,
         "first_target_reward_risk_ratio": _decimal_to_plain(first_target_reward / worst_case_loss)
@@ -1015,6 +1046,26 @@ def _lot_protective_loss(lot: Any, protective_exit: Any | None) -> Decimal | Non
     else:
         distance = protective_exit.trigger_price - lot.entry_price
     return max(distance, Decimal("0")) * lot.remaining_quantity
+
+
+def _lot_protective_locked_pnl(lot: Any, protective_exit: Any | None) -> Decimal | None:
+    if protective_exit is None:
+        return None
+    if lot.direction == "long":
+        distance = protective_exit.trigger_price - lot.entry_price
+    else:
+        distance = lot.entry_price - protective_exit.trigger_price
+    return distance * lot.remaining_quantity
+
+
+def _lot_protective_distance_pct(lot: Any, protective_exit: Any | None) -> Decimal | None:
+    if protective_exit is None or lot.entry_price <= 0:
+        return None
+    if lot.direction == "long":
+        distance = lot.entry_price - protective_exit.trigger_price
+    else:
+        distance = protective_exit.trigger_price - lot.entry_price
+    return distance / lot.entry_price * Decimal("100")
 
 
 def _lot_target_reward(lot: Any, target_exit: Any | None) -> Decimal | None:

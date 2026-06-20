@@ -146,3 +146,68 @@ def test_backtest_signal_replays_price_path_without_mutating_live_engine():
     assert body["final_daily_pnl"] == "10"
     assert body["final_open_notional"] == "0"
     assert positions_after.json()["positions"] == []
+
+
+def test_backtest_candles_use_conservative_adverse_first_path_and_report_excursion():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/backtest/signal",
+        json={
+            "signal": {
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "10",
+            },
+            "candles": [
+                {"label": "bar-1", "high": "112", "low": "94", "close": "108"},
+            ],
+        },
+    )
+    positions_after = client.get("/positions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["total_triggers"] == 1
+    assert body["marks"][0]["label"] == "bar-1"
+    assert body["marks"][0]["price"] == "108"
+    assert body["marks"][0]["triggered"] == [
+        {"symbol": "BTC/USDT", "kind": "stop_loss", "price": "94.00000000", "quantity": "1.00000000"}
+    ]
+    assert body["marks"][0]["mfe"] == "12.00"
+    assert body["marks"][0]["mae"] == "-6.00"
+    assert body["final_daily_pnl"] == "-6"
+    assert positions_after.json()["positions"] == []
+
+
+def test_bracket_summary_reports_protective_distance_and_locked_pnl_after_tighten():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "risk-snapshot",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+    )
+    amend = client.post("/brackets/risk-snapshot/stop", json={"trigger_price": "102"})
+    response = client.get("/brackets/risk-snapshot")
+
+    assert amend.status_code == 200
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["protective_trigger_price"] == "102.00"
+    assert summary["protective_distance_pct"] == "-2.00"
+    assert summary["worst_case_loss"] == "0"
+    assert summary["protective_locked_pnl"] == "2.00"
