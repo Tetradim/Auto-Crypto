@@ -1025,6 +1025,7 @@ def _signal_to_dict(signal: CryptoSignal) -> dict[str, Any]:
         if signal.breakeven_trigger_pct is not None
         else None,
         "breakeven_after_take_profit": signal.breakeven_after_take_profit,
+        "max_hold_marks": signal.max_hold_marks,
         "leverage": str(signal.leverage),
         "max_slippage_bps": signal.max_slippage_bps,
         "reduce_only": signal.reduce_only,
@@ -1099,6 +1100,7 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
         if trailing_activation_price is not None
         else None,
         "breakeven_after_take_profit": signal.breakeven_after_take_profit,
+        "max_hold_marks": signal.max_hold_marks,
         "estimated_notional": _decimal_to_plain(decision.order_notional) if decision.order_notional is not None else None,
         "estimated_quantity": _decimal_to_plain(estimated_quantity) if estimated_quantity is not None else None,
         "worst_case_loss": _decimal_to_plain(worst_case_loss) if worst_case_loss is not None else None,
@@ -1126,6 +1128,7 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
                 "trailing_step_amount": str(signal.trailing_step_amount)
                 if exit_order.kind == "trailing_stop" and signal.trailing_step_amount is not None
                 else None,
+                "max_hold_marks": signal.max_hold_marks if exit_order.kind == "time_exit" else None,
             }
             for exit_order in exits
         ],
@@ -1197,7 +1200,7 @@ def _active_exits_to_dict(
     *,
     signal_id: str | None = None,
     mark_price: Decimal | None = None,
-) -> list[dict[str, str | None]]:
+) -> list[dict[str, Any]]:
     return [
         _active_exit_to_dict(lot, exit_order, mark_price=mark_price)
         for lot in sorted(lots, key=lambda item: (item.symbol, item.signal_id))
@@ -1206,7 +1209,7 @@ def _active_exits_to_dict(
     ]
 
 
-def _active_exit_to_dict(lot: Any, exit_order: Any, *, mark_price: Decimal | None) -> dict[str, str | None]:
+def _active_exit_to_dict(lot: Any, exit_order: Any, *, mark_price: Decimal | None) -> dict[str, Any]:
     trailing_activation_price = _lot_trailing_activation_price(lot) if exit_order.kind == "trailing_stop" else None
     distance = _exit_distance(lot, exit_order, mark_price) if mark_price is not None else None
     return {
@@ -1247,6 +1250,11 @@ def _active_exit_to_dict(lot: Any, exit_order: Any, *, mark_price: Decimal | Non
         "breakeven_trigger_pct": str(lot.breakeven_trigger_pct) if lot.breakeven_trigger_pct else None,
         "breakeven_after_take_profit": str(lot.breakeven_after_take_profit).lower(),
         "breakeven_applied": str(lot.breakeven_applied).lower(),
+        "max_hold_marks": lot.max_hold_marks if exit_order.kind == "time_exit" else None,
+        "marks_seen": lot.marks_seen if exit_order.kind == "time_exit" else None,
+        "marks_remaining": max(lot.max_hold_marks - lot.marks_seen, 0)
+        if exit_order.kind == "time_exit" and lot.max_hold_marks is not None
+        else None,
         "signal_id": lot.signal_id,
         "remaining_quantity": str(lot.remaining_quantity),
         "entry_price": str(lot.entry_price),

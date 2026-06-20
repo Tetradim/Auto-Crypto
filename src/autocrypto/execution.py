@@ -54,6 +54,8 @@ class PaperLot:
     breakeven_trigger_pct: Decimal | None = None
     breakeven_after_take_profit: bool = False
     breakeven_applied: bool = False
+    max_hold_marks: int | None = None
+    marks_seen: int = 0
     entry_fee_remaining: Decimal = Decimal("0")
 
 
@@ -126,6 +128,7 @@ class PaperOrder:
     trailing_activation_price: Decimal | None = None
     breakeven_trigger_pct: Decimal | None = None
     breakeven_after_take_profit: bool = False
+    max_hold_marks: int | None = None
     exit_kind: str | None = None
     amend_target_index: int | None = None
     canceled_exit_orders: list[ExitOrder] = field(default_factory=list)
@@ -171,6 +174,7 @@ class PaperOrder:
             if self.breakeven_trigger_pct is not None
             else None,
             "breakeven_after_take_profit": self.breakeven_after_take_profit,
+            "max_hold_marks": self.max_hold_marks,
             "exit_kind": self.exit_kind,
             "amend_target_index": self.amend_target_index,
             "canceled_exit_orders": [
@@ -257,6 +261,7 @@ class PaperExchange:
             trailing_activation_price=signal.trailing_activation_price,
             breakeven_trigger_pct=signal.breakeven_trigger_pct,
             breakeven_after_take_profit=signal.breakeven_after_take_profit,
+            max_hold_marks=signal.max_hold_marks,
             reduce_only=signal.reduce_only,
             fee=fee,
             fee_bps=self.costs.fee_bps,
@@ -292,6 +297,7 @@ class PaperExchange:
                 continue
             self._apply_breakeven(lot, price)
             self._update_trailing_stop(lot, price)
+            lot.marks_seen += 1
             while lot.remaining_quantity > 0:
                 exit_order = self._triggered_exit(lot, price)
                 if exit_order is None:
@@ -749,6 +755,7 @@ class PaperExchange:
                     else None,
                     breakeven_trigger_pct=signal.breakeven_trigger_pct,
                     breakeven_after_take_profit=signal.breakeven_after_take_profit,
+                    max_hold_marks=signal.max_hold_marks,
                     entry_fee_remaining=fee,
                 )
             )
@@ -780,6 +787,7 @@ class PaperExchange:
                     else None,
                     breakeven_trigger_pct=signal.breakeven_trigger_pct,
                     breakeven_after_take_profit=signal.breakeven_after_take_profit,
+                    max_hold_marks=signal.max_hold_marks,
                     entry_fee_remaining=fee,
                 )
             )
@@ -835,6 +843,7 @@ class PaperExchange:
                     else None,
                     breakeven_trigger_pct=order.breakeven_trigger_pct,
                     breakeven_after_take_profit=order.breakeven_after_take_profit,
+                    max_hold_marks=order.max_hold_marks,
                     entry_fee_remaining=order.fee,
                 )
             )
@@ -866,6 +875,7 @@ class PaperExchange:
                     else None,
                     breakeven_trigger_pct=order.breakeven_trigger_pct,
                     breakeven_after_take_profit=order.breakeven_after_take_profit,
+                    max_hold_marks=order.max_hold_marks,
                     entry_fee_remaining=order.fee,
                 )
             )
@@ -956,6 +966,13 @@ class PaperExchange:
                 return exit_order
             if lot.direction == "short" and exit_order.kind == "take_profit" and price <= exit_order.trigger_price:
                 return exit_order
+        if lot.max_hold_marks is not None and lot.marks_seen >= lot.max_hold_marks:
+            return ExitOrder(
+                kind="time_exit",
+                trigger_price=_money(price),
+                close_pct=Decimal("100"),
+                oca_group=lot.exit_orders[0].oca_group if lot.exit_orders else f"oca-{_order_fragment(lot.signal_id)}",
+            )
         return None
 
     def _update_trailing_stop(self, lot: PaperLot, price: Decimal) -> None:
@@ -1261,6 +1278,15 @@ def build_exit_orders(signal: CryptoSignal) -> list[ExitOrder]:
             else "open"
         )
         exits.append(ExitOrder(kind="trailing_stop", trigger_price=_money(trigger), oca_group=oca_group, status=status))
+    if signal.max_hold_marks is not None:
+        exits.append(
+            ExitOrder(
+                kind="time_exit",
+                trigger_price=_money(signal.price),
+                oca_group=oca_group,
+                status="waiting",
+            )
+        )
     return exits
 
 
@@ -1275,6 +1301,7 @@ def _has_exit_plan(signal: CryptoSignal) -> bool:
         or signal.trailing_stop_price is not None
         or signal.trailing_activation_price is not None
         or signal.breakeven_trigger_pct is not None
+        or signal.max_hold_marks is not None
     )
 
 
@@ -1570,6 +1597,7 @@ def _paper_order_from_dict(payload: dict) -> PaperOrder:
         if payload.get("breakeven_trigger_pct") is not None
         else None,
         breakeven_after_take_profit=_bool_from_payload(payload.get("breakeven_after_take_profit")),
+        max_hold_marks=int(payload["max_hold_marks"]) if payload.get("max_hold_marks") is not None else None,
         exit_kind=payload.get("exit_kind"),
         amend_target_index=int(payload["amend_target_index"])
         if payload.get("amend_target_index") is not None

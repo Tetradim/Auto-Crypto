@@ -225,6 +225,62 @@ def test_trailing_stop_ratcheted_up_then_triggers_on_pullback():
     assert exchange.list_positions()[0]["realized_pnl"] == "4.50000000"
 
 
+def test_paper_bracket_time_exit_closes_after_max_hold_marks():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "timed-entry",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "20",
+            "max_hold_marks": 2,
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    first = exchange.update_price("BTC/USDT", Decimal("101"))
+    second = exchange.update_price("BTC/USDT", Decimal("102"))
+
+    assert first == []
+    assert second == [
+        {"symbol": "BTC/USDT", "kind": "time_exit", "price": "102.00000000", "quantity": "1.00000000"}
+    ]
+    assert exchange.orders[-1].exit_kind == "time_exit"
+    assert exchange.orders[-1].canceled_exit_orders
+    assert exchange.list_positions()[0]["quantity"] == "0.00000000"
+    assert exchange.list_positions()[0]["realized_pnl"] == "2.00000000"
+
+
+def test_short_time_exit_opens_and_closes_paper_bracket():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "timed-short",
+            "symbol": "ETH/USDT",
+            "side": "short",
+            "quote_amount": "100",
+            "price": "100",
+            "time_stop_marks": 1,
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    triggered = exchange.update_price("ETH/USDT", Decimal("95"))
+
+    assert triggered == [
+        {"symbol": "ETH/USDT", "kind": "time_exit", "price": "95.00000000", "quantity": "1.00000000"}
+    ]
+    assert exchange.orders[-1].side == "buy"
+    assert exchange.list_positions()[0]["realized_pnl"] == "5.00000000"
+
+
 def test_trailing_stop_step_pct_skips_small_long_ratchets():
     exchange = PaperExchange()
     engine = TradingEngine(exchange=exchange)

@@ -211,6 +211,11 @@ def _active_exits_snapshot(lots: list) -> list[dict]:
             "low_water_mark": str(lot.low_water_mark) if exit_order.kind == "trailing_stop" and lot.low_water_mark else None,
             "breakeven_after_take_profit": lot.breakeven_after_take_profit,
             "breakeven_applied": lot.breakeven_applied,
+            "max_hold_marks": lot.max_hold_marks if exit_order.kind == "time_exit" else None,
+            "marks_seen": lot.marks_seen if exit_order.kind == "time_exit" else None,
+            "marks_remaining": max(lot.max_hold_marks - lot.marks_seen, 0)
+            if exit_order.kind == "time_exit" and lot.max_hold_marks is not None
+            else None,
             "remaining_quantity": str(lot.remaining_quantity),
         }
         for lot in sorted(lots, key=lambda item: (item.symbol, item.signal_id))

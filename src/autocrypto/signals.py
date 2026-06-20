@@ -45,6 +45,7 @@ class CryptoSignal:
     trailing_activation_price: Decimal | None = None
     breakeven_trigger_pct: Decimal | None = None
     breakeven_after_take_profit: bool = False
+    max_hold_marks: int | None = None
     leverage: Decimal = Decimal("1")
     max_slippage_bps: int = 100
     reduce_only: bool = False
@@ -118,6 +119,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         _field(payload, bracket, "breakeven_after_take_profit", "move_stop_to_breakeven_after_tp"),
         default=False,
     )
+    max_hold_marks = _optional_positive_int(_field(payload, bracket, "max_hold_marks", "time_stop_marks"))
     leverage = _optional_positive_decimal(payload.get("leverage")) or Decimal("1")
     max_slippage_bps = _non_negative_int(payload.get("max_slippage_bps"), default=100)
     exchange = str(payload.get("exchange") or payload.get("venue") or "paper").strip().lower()
@@ -158,6 +160,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         else None,
         "breakeven_trigger_pct": str(breakeven_trigger_pct) if breakeven_trigger_pct is not None else None,
         "breakeven_after_take_profit": breakeven_after_take_profit,
+        "max_hold_marks": max_hold_marks,
         "leverage": str(leverage),
         "max_slippage_bps": max_slippage_bps,
         "reduce_only": reduce_only,
@@ -191,6 +194,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         trailing_activation_price=trailing_activation_price,
         breakeven_trigger_pct=breakeven_trigger_pct,
         breakeven_after_take_profit=breakeven_after_take_profit,
+        max_hold_marks=max_hold_marks,
         leverage=leverage,
         max_slippage_bps=max_slippage_bps,
         reduce_only=reduce_only,
@@ -270,6 +274,18 @@ def _non_negative_int(value: Any, *, default: int) -> int:
     parsed = int(value)
     if parsed < 0:
         raise SignalValidationError(f"value must be non-negative: {value}")
+    return parsed
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise SignalValidationError(f"invalid integer: {value}") from exc
+    if parsed <= 0:
+        raise SignalValidationError("integer value must be positive")
     return parsed
 
 

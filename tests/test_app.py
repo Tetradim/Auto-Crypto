@@ -144,6 +144,60 @@ def test_signal_preview_includes_trailing_step_controls():
     assert trailing_exit["trailing_step_pct"] == "1"
 
 
+def test_signal_preview_includes_time_stop_mark_plan():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/signals/preview",
+        json={
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "max_hold_marks": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    time_exit = next(exit_order for exit_order in body["bracket_plan"]["exits"] if exit_order["kind"] == "time_exit")
+    assert body["signal"]["max_hold_marks"] == 3
+    assert body["bracket_plan"]["max_hold_marks"] == 3
+    assert time_exit["status"] == "waiting"
+    assert time_exit["max_hold_marks"] == 3
+
+
+def test_market_price_response_reports_time_stop_marks_remaining():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "20",
+            "max_hold_marks": 2,
+        },
+    )
+
+    response = client.post("/market/price", json={"symbol": "BTCUSDT", "price": "101"})
+
+    assert response.status_code == 200
+    body = response.json()
+    time_exit = next(exit_order for exit_order in body["active_exits"] if exit_order["kind"] == "time_exit")
+    assert body["triggered"] == []
+    assert time_exit["max_hold_marks"] == 2
+    assert time_exit["marks_seen"] == 1
+    assert time_exit["marks_remaining"] == 1
+
+
 def test_signal_preview_reports_risk_sized_bracket_metrics():
     app = create_app()
     client = TestClient(app)
@@ -227,6 +281,38 @@ def test_backtest_signal_replays_price_path_without_mutating_live_engine():
     assert body["marks"][0]["active_exits"]
     assert body["final_daily_pnl"] == "10"
     assert body["final_open_notional"] == "0"
+    assert positions_after.json()["positions"] == []
+
+
+def test_backtest_signal_can_trigger_time_stop_without_mutating_live_engine():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/backtest/signal",
+        json={
+            "signal": {
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "10",
+                "max_hold_marks": 2,
+            },
+            "prices": ["101", "102"],
+        },
+    )
+    positions_after = client.get("/positions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_triggers"] == 1
+    assert body["marks"][0]["active_exits"][-1]["marks_remaining"] == 1
+    assert body["marks"][1]["triggered"] == [
+        {"symbol": "BTC/USDT", "kind": "time_exit", "price": "102.00000000", "quantity": "1.00000000"}
+    ]
+    assert body["final_daily_pnl"] == "2"
     assert positions_after.json()["positions"] == []
 
 
