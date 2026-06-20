@@ -120,6 +120,30 @@ def test_signal_preview_includes_fixed_amount_trailing_activation_price():
     assert body["bracket_plan"]["exits"][2]["status"] == "pending_activation"
 
 
+def test_signal_preview_includes_trailing_step_controls():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/signals/preview",
+        json={
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "trailing_stop_pct": "4",
+            "trailing_step_pct": "1",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    trailing_exit = next(exit_order for exit_order in body["bracket_plan"]["exits"] if exit_order["kind"] == "trailing_stop")
+    assert body["signal"]["trailing_step_pct"] == "1"
+    assert trailing_exit["trailing_step_pct"] == "1"
+
+
 def test_signal_preview_reports_risk_sized_bracket_metrics():
     app = create_app()
     client = TestClient(app)

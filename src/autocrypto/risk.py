@@ -118,6 +118,12 @@ def evaluate_signal(
         reasons.append("duplicate_trailing_activation")
     if signal.trailing_stop_price is not None and signal.trailing_stop_pct is None and signal.trailing_stop_amount is None:
         reasons.append("trailing_stop_pct_required_for_price")
+    if (
+        (signal.trailing_step_pct is not None or signal.trailing_step_amount is not None)
+        and signal.trailing_stop_pct is None
+        and signal.trailing_stop_amount is None
+    ):
+        reasons.append("trailing_stop_required_for_step")
     _validate_trailing_activation_price(signal, reasons)
     if (
         signal.breakeven_trigger_pct is not None

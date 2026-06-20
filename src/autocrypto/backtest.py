@@ -194,6 +194,12 @@ def _active_exits_snapshot(lots: list) -> list[dict]:
             "trailing_stop_amount": str(lot.trailing_stop_amount)
             if exit_order.kind == "trailing_stop" and lot.trailing_stop_amount
             else None,
+            "trailing_step_pct": str(lot.trailing_step_pct)
+            if exit_order.kind == "trailing_stop" and lot.trailing_step_pct
+            else None,
+            "trailing_step_amount": str(lot.trailing_step_amount)
+            if exit_order.kind == "trailing_stop" and lot.trailing_step_amount
+            else None,
             "trailing_activation_pct": str(lot.trailing_activation_pct)
             if exit_order.kind == "trailing_stop" and lot.trailing_activation_pct
             else None,

@@ -27,6 +27,13 @@ def test_parse_text_signal_accepts_ts_alias_for_trailing_stop():
     assert signal.trailing_stop_pct == Decimal("4")
 
 
+def test_parse_text_signal_accepts_trailing_step_pct():
+    signal = parse_text_signal("BUY BTCUSDT $100 @ 50000 SL 2% TP 5% TRAIL 4% STEP 1%", source="discord")
+
+    assert signal.trailing_stop_pct == Decimal("4")
+    assert signal.trailing_step_pct == Decimal("1")
+
+
 def test_parse_text_signal_accepts_absolute_bracket_prices():
     signal = parse_text_signal("BUY BTCUSDT $125 @ 50000 SL @ 49000 TP @ 51500 TRAIL 3%", source="discord")
 

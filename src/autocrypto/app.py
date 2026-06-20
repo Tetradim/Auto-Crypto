@@ -854,6 +854,8 @@ def _signal_to_dict(signal: CryptoSignal) -> dict[str, Any]:
         "trailing_stop_pct": str(signal.trailing_stop_pct) if signal.trailing_stop_pct is not None else None,
         "trailing_stop_amount": str(signal.trailing_stop_amount) if signal.trailing_stop_amount is not None else None,
         "trailing_stop_price": str(signal.trailing_stop_price) if signal.trailing_stop_price is not None else None,
+        "trailing_step_pct": str(signal.trailing_step_pct) if signal.trailing_step_pct is not None else None,
+        "trailing_step_amount": str(signal.trailing_step_amount) if signal.trailing_step_amount is not None else None,
         "trailing_activation_pct": str(signal.trailing_activation_pct)
         if signal.trailing_activation_pct is not None
         else None,
@@ -952,6 +954,12 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
                 "close_pct": str(exit_order.close_pct),
                 "oca_group": exit_order.oca_group,
                 "status": exit_order.status,
+                "trailing_step_pct": str(signal.trailing_step_pct)
+                if exit_order.kind == "trailing_stop" and signal.trailing_step_pct is not None
+                else None,
+                "trailing_step_amount": str(signal.trailing_step_amount)
+                if exit_order.kind == "trailing_stop" and signal.trailing_step_amount is not None
+                else None,
             }
             for exit_order in exits
         ],
@@ -1036,6 +1044,12 @@ def _active_exit_to_dict(lot: Any, exit_order: Any, *, mark_price: Decimal | Non
         else None,
         "initial_trailing_stop_price": str(lot.trailing_stop_price)
         if exit_order.kind == "trailing_stop" and lot.trailing_stop_price
+        else None,
+        "trailing_step_pct": str(lot.trailing_step_pct)
+        if exit_order.kind == "trailing_stop" and lot.trailing_step_pct
+        else None,
+        "trailing_step_amount": str(lot.trailing_step_amount)
+        if exit_order.kind == "trailing_stop" and lot.trailing_step_amount
         else None,
         "trailing_activation_pct": str(lot.trailing_activation_pct)
         if exit_order.kind == "trailing_stop" and lot.trailing_activation_pct

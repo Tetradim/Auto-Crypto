@@ -44,6 +44,8 @@ class PaperLot:
     trailing_stop_pct: Decimal | None = None
     trailing_stop_amount: Decimal | None = None
     trailing_stop_price: Decimal | None = None
+    trailing_step_pct: Decimal | None = None
+    trailing_step_amount: Decimal | None = None
     trailing_activation_pct: Decimal | None = None
     trailing_activation_price: Decimal | None = None
     trailing_activated: bool = True
@@ -117,6 +119,8 @@ class PaperOrder:
     trailing_stop_pct: Decimal | None = None
     trailing_stop_amount: Decimal | None = None
     trailing_stop_price: Decimal | None = None
+    trailing_step_pct: Decimal | None = None
+    trailing_step_amount: Decimal | None = None
     trailing_activation_pct: Decimal | None = None
     trailing_activation_price: Decimal | None = None
     breakeven_trigger_pct: Decimal | None = None
@@ -152,6 +156,8 @@ class PaperOrder:
             "trailing_stop_pct": str(self.trailing_stop_pct) if self.trailing_stop_pct is not None else None,
             "trailing_stop_amount": str(self.trailing_stop_amount) if self.trailing_stop_amount is not None else None,
             "trailing_stop_price": str(self.trailing_stop_price) if self.trailing_stop_price is not None else None,
+            "trailing_step_pct": str(self.trailing_step_pct) if self.trailing_step_pct is not None else None,
+            "trailing_step_amount": str(self.trailing_step_amount) if self.trailing_step_amount is not None else None,
             "trailing_activation_pct": str(self.trailing_activation_pct)
             if self.trailing_activation_pct is not None
             else None,
@@ -240,6 +246,8 @@ class PaperExchange:
             trailing_stop_pct=signal.trailing_stop_pct,
             trailing_stop_amount=signal.trailing_stop_amount,
             trailing_stop_price=signal.trailing_stop_price,
+            trailing_step_pct=signal.trailing_step_pct,
+            trailing_step_amount=signal.trailing_step_amount,
             trailing_activation_pct=signal.trailing_activation_pct,
             trailing_activation_price=signal.trailing_activation_price,
             breakeven_trigger_pct=signal.breakeven_trigger_pct,
@@ -627,6 +635,8 @@ class PaperExchange:
                     trailing_stop_pct=signal.trailing_stop_pct,
                     trailing_stop_amount=signal.trailing_stop_amount,
                     trailing_stop_price=signal.trailing_stop_price,
+                    trailing_step_pct=signal.trailing_step_pct,
+                    trailing_step_amount=signal.trailing_step_amount,
                     trailing_activation_pct=signal.trailing_activation_pct,
                     trailing_activation_price=signal.trailing_activation_price,
                     trailing_activated=_trailing_starts_activated(signal.trailing_activation_pct, signal.trailing_activation_price),
@@ -655,6 +665,8 @@ class PaperExchange:
                     trailing_stop_pct=signal.trailing_stop_pct,
                     trailing_stop_amount=signal.trailing_stop_amount,
                     trailing_stop_price=signal.trailing_stop_price,
+                    trailing_step_pct=signal.trailing_step_pct,
+                    trailing_step_amount=signal.trailing_step_amount,
                     trailing_activation_pct=signal.trailing_activation_pct,
                     trailing_activation_price=signal.trailing_activation_price,
                     trailing_activated=_trailing_starts_activated(signal.trailing_activation_pct, signal.trailing_activation_price),
@@ -704,6 +716,8 @@ class PaperExchange:
                     trailing_stop_pct=order.trailing_stop_pct,
                     trailing_stop_amount=order.trailing_stop_amount,
                     trailing_stop_price=order.trailing_stop_price,
+                    trailing_step_pct=order.trailing_step_pct,
+                    trailing_step_amount=order.trailing_step_amount,
                     trailing_activation_pct=order.trailing_activation_pct,
                     trailing_activation_price=order.trailing_activation_price,
                     trailing_activated=_trailing_starts_activated(order.trailing_activation_pct, order.trailing_activation_price),
@@ -732,6 +746,8 @@ class PaperExchange:
                     trailing_stop_pct=order.trailing_stop_pct,
                     trailing_stop_amount=order.trailing_stop_amount,
                     trailing_stop_price=order.trailing_stop_price,
+                    trailing_step_pct=order.trailing_step_pct,
+                    trailing_step_amount=order.trailing_step_amount,
                     trailing_activation_pct=order.trailing_activation_pct,
                     trailing_activation_price=order.trailing_activation_price,
                     trailing_activated=_trailing_starts_activated(order.trailing_activation_pct, order.trailing_activation_price),
@@ -833,10 +849,15 @@ class PaperExchange:
             return
         lot.high_water_mark = price
         trigger = _money(price - _trailing_distance(lot, price))
+        current_trigger = _current_trailing_trigger(lot)
+        if current_trigger is not None and trigger <= current_trigger:
+            return
+        if current_trigger is not None and not _trailing_step_reached(lot, current_trigger, trigger):
+            return
         lot.exit_orders = [
             ExitOrder(
                 kind=exit_order.kind,
-                trigger_price=max(exit_order.trigger_price, trigger),
+                trigger_price=trigger,
                 close_pct=exit_order.close_pct,
                 oca_group=exit_order.oca_group,
                 status="open",
@@ -861,10 +882,15 @@ class PaperExchange:
             return
         lot.low_water_mark = price
         trigger = _money(price + _trailing_distance(lot, price))
+        current_trigger = _current_trailing_trigger(lot)
+        if current_trigger is not None and trigger >= current_trigger:
+            return
+        if current_trigger is not None and not _trailing_step_reached(lot, current_trigger, trigger):
+            return
         lot.exit_orders = [
             ExitOrder(
                 kind=exit_order.kind,
-                trigger_price=min(exit_order.trigger_price, trigger),
+                trigger_price=trigger,
                 close_pct=exit_order.close_pct,
                 oca_group=exit_order.oca_group,
                 status="open",
@@ -1242,6 +1268,27 @@ def _trailing_distance(lot: PaperLot, price: Decimal) -> Decimal:
     return price * lot.trailing_stop_pct / Decimal("100")
 
 
+def _current_trailing_trigger(lot: PaperLot) -> Decimal | None:
+    trailing_exit = next((exit_order for exit_order in lot.exit_orders if exit_order.kind == "trailing_stop"), None)
+    return trailing_exit.trigger_price if trailing_exit is not None else None
+
+
+def _trailing_step_reached(lot: PaperLot, current_trigger: Decimal, next_trigger: Decimal) -> bool:
+    step = _trailing_step(lot, current_trigger)
+    if step <= 0:
+        return True
+    improvement = next_trigger - current_trigger if lot.direction == "long" else current_trigger - next_trigger
+    return improvement >= step
+
+
+def _trailing_step(lot: PaperLot, current_trigger: Decimal) -> Decimal:
+    if lot.trailing_step_amount is not None:
+        return lot.trailing_step_amount
+    if lot.trailing_step_pct is not None:
+        return current_trigger * lot.trailing_step_pct / Decimal("100")
+    return Decimal("0")
+
+
 def _filled_exit(exit_order: ExitOrder) -> ExitOrder:
     return ExitOrder(
         kind=exit_order.kind,
@@ -1295,6 +1342,12 @@ def _paper_order_from_dict(payload: dict) -> PaperOrder:
         else None,
         trailing_stop_price=Decimal(str(payload["trailing_stop_price"]))
         if payload.get("trailing_stop_price") is not None
+        else None,
+        trailing_step_pct=Decimal(str(payload["trailing_step_pct"]))
+        if payload.get("trailing_step_pct") is not None
+        else None,
+        trailing_step_amount=Decimal(str(payload["trailing_step_amount"]))
+        if payload.get("trailing_step_amount") is not None
         else None,
         trailing_activation_pct=Decimal(str(payload["trailing_activation_pct"]))
         if payload.get("trailing_activation_pct") is not None

@@ -51,6 +51,8 @@ def _summary(signal: CryptoSignal, *, created_at: str) -> dict:
         "trailing_stop_pct": str(signal.trailing_stop_pct) if signal.trailing_stop_pct is not None else None,
         "trailing_stop_amount": str(signal.trailing_stop_amount) if signal.trailing_stop_amount is not None else None,
         "trailing_stop_price": str(signal.trailing_stop_price) if signal.trailing_stop_price is not None else None,
+        "trailing_step_pct": str(signal.trailing_step_pct) if signal.trailing_step_pct is not None else None,
+        "trailing_step_amount": str(signal.trailing_step_amount) if signal.trailing_step_amount is not None else None,
         "trailing_activation_pct": str(signal.trailing_activation_pct)
         if signal.trailing_activation_pct is not None
         else None,

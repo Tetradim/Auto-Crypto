@@ -225,6 +225,64 @@ def test_trailing_stop_ratcheted_up_then_triggers_on_pullback():
     assert exchange.list_positions()[0]["realized_pnl"] == "4.50000000"
 
 
+def test_trailing_stop_step_pct_skips_small_long_ratchets():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "stepped-trailing-entry",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "trailing_stop_pct": "5",
+            "trailing_step_pct": "1",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    small_move = exchange.update_price("BTC/USDT", Decimal("100.50"))
+    unchanged = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    larger_move = exchange.update_price("BTC/USDT", Decimal("101.10"))
+    ratcheted = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+
+    assert small_move == []
+    assert larger_move == []
+    assert unchanged.trigger_price == Decimal("95.00")
+    assert ratcheted.trigger_price == Decimal("96.05")
+
+
+def test_trailing_stop_step_amount_skips_small_short_ratchets():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "stepped-short-trailing-entry",
+            "symbol": "ETH/USDT",
+            "side": "short",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "trailing_stop_amount": "5",
+            "trailing_step_amount": "2",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    small_move = exchange.update_price("ETH/USDT", Decimal("99"))
+    unchanged = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    larger_move = exchange.update_price("ETH/USDT", Decimal("97"))
+    ratcheted = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+
+    assert small_move == []
+    assert larger_move == []
+    assert unchanged.trigger_price == Decimal("105.00")
+    assert ratcheted.trigger_price == Decimal("102.00")
+
+
 def test_exact_initial_trailing_stop_price_is_used_before_ratcheting():
     exchange = PaperExchange()
     engine = TradingEngine(exchange=exchange)

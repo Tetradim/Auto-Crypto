@@ -24,6 +24,7 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Links paper bracket exit legs with OCA-style groups and records which sibling stop, take-profit, or trailing legs are canceled when a final paper exit closes the lot
 - Marks activation-gated trailing stops as `pending_activation` until price movement arms them, then records triggered paper exits as `filled` reduce-only close orders
 - Supports paper trailing stops by percentage callback or fixed quote-distance amount, plus either percentage or absolute-price activation gates
+- Supports paper trailing-step controls so trailing stops only ratchet after a minimum trigger improvement instead of every favorable tick
 - Lists all active synthetic paper brackets with remaining-notional, worst-case stop-loss, and first-target reward summaries
 - Supports protective stop, trailing-stop, and manual breakeven amendments that only tighten risk
 - Supports paper-only bracket close-by-signal controls that flatten the selected simulated bracket at an operator-supplied mark and cancel remaining synthetic exits
@@ -178,7 +179,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/market/price -ContentT
 }'
 ```
 
-For buy brackets, `stop_loss_pct` creates a fixed protective sell below entry, `take_profit_pct` creates a fixed profit-taking sell above entry, and `trailing_stop_pct` creates a sell stop that starts below entry and ratchets upward when `POST /market/price` marks a new high-water price. Use `trailing_stop_amount` or `trail_amount` when the trail should stay a fixed quote-currency distance behind the high-water mark instead of a percentage. Use `stop_loss_price`, `take_profit_price`, and `trailing_stop_price` when the alert source already calculated exact initial trigger prices. `trailing_stop_price` sets only the starting paper trigger; `trailing_stop_pct` or `trailing_stop_amount` still controls the ratchet distance after favorable marks. The trailing stop never moves lower. Add `trailing_activation_pct` to keep the trailing leg dormant until price has moved favorably by that percent, or `trailing_activation_price`, `trail_activation_price`, or `activation_price` to arm it at an exact favorable mark. Add `breakeven_trigger_pct` to move protective stop exits up to the entry price after a favorable move.
+For buy brackets, `stop_loss_pct` creates a fixed protective sell below entry, `take_profit_pct` creates a fixed profit-taking sell above entry, and `trailing_stop_pct` creates a sell stop that starts below entry and ratchets upward when `POST /market/price` marks a new high-water price. Use `trailing_stop_amount` or `trail_amount` when the trail should stay a fixed quote-currency distance behind the high-water mark instead of a percentage. Use `stop_loss_price`, `take_profit_price`, and `trailing_stop_price` when the alert source already calculated exact initial trigger prices. `trailing_stop_price` sets only the starting paper trigger; `trailing_stop_pct` or `trailing_stop_amount` still controls the ratchet distance after favorable marks. The trailing stop never moves lower. Add `trailing_step_pct`, `trail_step_pct`, `trailing_step_amount`, or `trail_step_amount` to require the next synthetic trailing trigger to improve by at least that percentage or quote-currency distance before the paper stop ratchets. Add `trailing_activation_pct` to keep the trailing leg dormant until price has moved favorably by that percent, or `trailing_activation_price`, `trail_activation_price`, or `activation_price` to arm it at an exact favorable mark. Add `breakeven_trigger_pct` to move protective stop exits up to the entry price after a favorable move.
 
 For short brackets, send `side: "sell"` or `side: "short"` with at least one exit field such as `stop_loss_pct`, `stop_loss_price`, `take_profit_pct`, `take_profit_price`, `trailing_stop_pct`, or `trailing_stop_amount`. Paper stop-loss and trailing-stop triggers sit above entry, paper take-profit triggers sit below entry, and exit orders buy back paper quantity. Short trailing stops track a low-water price and ratchet downward only after favorable price movement; `trailing_activation_pct` delays arming until price falls by that percent, while `trailing_activation_price` arms at an exact lower mark. A plain `SELL` without bracket fields remains a manual long close. Send `side: "close_short"` or `reduce_only: true` with `side: "buy"` to buy back paper short quantity without opening a new paper long.
 
@@ -268,7 +269,7 @@ SELL ETH/USDT 0.25 @ 3000
 SHORT ETHUSDT $75 @ 3000 SL 2% TP 4% TRAIL 3% ACT 1%
 ```
 
-Text alerts support percentage brackets (`SL 2%`, `TP 5%`), absolute brackets (`SL @ 49000`, `TP @ 51500`), and staged take-profit targets such as `TP1 3% 50% TP2 @ 53000 50%`. Staged text targets map to the same `take_profit_targets` structure as JSON alerts, and the parser rejects ambiguous prose rather than guessing.
+Text alerts support percentage brackets (`SL 2%`, `TP 5%`), absolute brackets (`SL @ 49000`, `TP @ 51500`), trailing steps (`TRAIL 4% STEP 1%`), and staged take-profit targets such as `TP1 3% 50% TP2 @ 53000 50%`. Staged text targets map to the same `take_profit_targets` structure as JSON alerts, and the parser rejects ambiguous prose rather than guessing.
 
 Validate text without placing an order:
 
@@ -308,6 +309,7 @@ Recommended fields:
 - `trailing_stop_pct`
 - `trailing_stop_amount` or `trail_amount` to trail by a fixed quote-currency distance instead of a percent
 - `trailing_stop_price` or `trail_price` to set the exact initial paper trailing trigger while `trailing_stop_pct` or `trailing_stop_amount` controls later ratchets
+- `trailing_step_pct`, `trail_step_pct`, `trailing_step_amount`, or `trail_step_amount` to reduce trailing-stop churn by requiring a minimum trigger improvement before ratcheting
 - `trailing_activation_pct` or `trail_activation_pct`
 - `trailing_activation_price`, `trail_activation_price`, or `activation_price`
 - `breakeven_trigger_pct`
@@ -335,6 +337,7 @@ Risk checks run before paper execution:
 - `max_stop_loss_pct_exceeded`
 - `max_trailing_stop_pct_exceeded`
 - `trailing_stop_required_for_activation`
+- `trailing_stop_required_for_step`
 - `trailing_stop_pct_required_for_price`
 - `invalid_trailing_stop_price`
 - `price_required_for_trailing_stop_price`
@@ -363,7 +366,7 @@ When `quote_amount` and `base_amount` are omitted, JSON signals may set `risk_am
 
 Current bot work is guided by paper-first risk controls and exchange order behavior:
 
-- Binance documents spot trailing stops as dynamic contingent orders that track favorable price movement and trigger after a configured reversal delta; it also allows an optional stop price before tracking begins, which maps to Auto-Crypto's paper `trailing_activation_pct` and `trailing_activation_price`: <https://developers.binance.com/docs/binance-spot-api-docs/faqs/trailing-stop-faq>
+- Binance documents spot trailing stops as dynamic contingent orders that track favorable price movement and trigger after a configured reversal delta; it also allows an optional stop price before tracking begins, which maps to Auto-Crypto's paper `trailing_activation_pct` and `trailing_activation_price`. Binance also documents per-symbol trailing-delta filters, which is why Auto-Crypto now supports paper `trailing_step_pct` and `trailing_step_amount` to avoid unrealistic tick-by-tick ratchets in simulations: <https://developers.binance.com/docs/binance-spot-api-docs/faqs/trailing-stop-faq>
 - Binance Futures describes trailing stop orders as requiring both an activation condition and a callback-rate reversal condition before a market order is issued, matching Auto-Crypto's paper activation-plus-ratchet model: <https://www.binance.com/en/support/faq/detail/360042299292>
 - Binance.US currently describes trailing stops as stops whose trigger price follows favorable market movement and fires when the market moves against the position, matching Auto-Crypto's high-water and low-water paper trailing logic: <https://support.binance.us/en/articles/9842886-trailing-stop-orders-what-they-are-and-how-to-use-them>
 - Binance order payloads expose trailing-stop fields such as `trailingDelta` and `trailingTime`, which is useful when mapping paper behavior to future live adapters: <https://developers.binance.com/docs/binance-spot-api-docs/rest-api/trading-endpoints>

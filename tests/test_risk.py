@@ -406,6 +406,25 @@ def test_risk_rejects_wide_trailing_stop_or_activation_without_trailing_stop():
     assert "trailing_stop_required_for_activation" in activation_decision.reason_codes
 
 
+def test_risk_rejects_trailing_step_without_trailing_stop():
+    signal = normalize_signal(
+        {
+            "symbol": "ETH/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "3000",
+            "stop_loss_pct": "3",
+            "trailing_step_pct": "1",
+        },
+        source="test",
+    )
+
+    decision = evaluate_signal(signal, RiskConfig(), AccountState())
+
+    assert decision.approved is False
+    assert "trailing_stop_required_for_step" in decision.reason_codes
+
+
 def test_risk_applies_trailing_amount_to_max_trailing_stop_pct_cap():
     signal = normalize_signal(
         {
