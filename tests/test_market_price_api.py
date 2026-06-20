@@ -141,6 +141,42 @@ def test_market_price_preview_reports_trigger_without_mutating_paper_state(tmp_p
     assert state_after_preview["active_exits"]
 
 
+def test_bracket_preview_reports_one_signal_trigger_distance_without_mutating_state(tmp_path):
+    repo = SQLiteRepository(tmp_path / "bracket_preview.sqlite3")
+    app = create_app(repository=repo)
+    client = TestClient(app)
+    for signal_id, take_profit_pct in [("preview-lot-one", "5"), ("preview-lot-two", "10")]:
+        client.post(
+            "/webhooks/tradingview",
+            json={
+                "signal_id": signal_id,
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "4",
+                "take_profit_pct": take_profit_pct,
+                "trailing_stop_pct": "3",
+                "trailing_activation_pct": "2",
+            },
+        )
+
+    preview = client.post("/brackets/preview-lot-one/preview", json={"price": "105"})
+    state_after_preview = client.get("/ui/state").json()
+
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["would_trigger"] == [
+        {"symbol": "BTC/USDT", "kind": "take_profit", "price": "105.00000000", "quantity": "1.00000000"}
+    ]
+    target_exit = next(exit_order for exit_order in body["active_exits"] if exit_order["kind"] == "take_profit")
+    trailing_exit = next(exit_order for exit_order in body["active_exits"] if exit_order["kind"] == "trailing_stop")
+    assert target_exit["distance_to_trigger"] == "0.00"
+    assert trailing_exit["trailing_activation_price"] == "102.00"
+    assert state_after_preview["positions"][0]["quantity"] == "2.00000000"
+    assert len(state_after_preview["orders"]) == 2
+
+
 def test_bracket_cancel_endpoint_cancels_exits_and_records_audit(tmp_path):
     repo = SQLiteRepository(tmp_path / "bracket_cancel.sqlite3")
     app = create_app(repository=repo)

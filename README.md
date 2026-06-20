@@ -24,10 +24,11 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Links paper bracket exit legs with OCA-style groups and records which sibling stop, take-profit, or trailing legs are canceled when a final paper exit closes the lot
 - Marks activation-gated trailing stops as `pending_activation` until price movement arms them, then records triggered paper exits as `filled` reduce-only close orders
 - Lists all active synthetic paper brackets and supports protective stop amendments that only tighten risk
+- Previews one active bracket by signal ID at a hypothetical mark, including trigger distance and trailing activation context
 - Cancels active synthetic paper bracket exits by signal ID while leaving the underlying paper position open for separate manual management
 - Previews hypothetical market-price marks and bracket/trailing exits without mutating paper orders or positions
 - Previews server-side risk decisions from the operator UI without placing orders
-- Backtests one signal against a supplied paper mark-price path without mutating the live in-memory engine
+- Backtests one signal against a supplied paper mark-price path and returns active exit snapshots after each mark without mutating the live in-memory engine
 - Shows persisted signal history with one-click reload into the Trading Desk
 - Supports quote-notional and base-quantity ticket sizing, paper position close controls, bracket lot context and trigger tests, and local unrealized P&L marks in the operator UI
 - Captures inline halt and approval rejection reasons in operator workflows
@@ -184,6 +185,10 @@ Invoke-RestMethod http://127.0.0.1:8004/brackets
 
 Invoke-RestMethod http://127.0.0.1:8004/brackets/btc-breakout-001
 
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-001/preview -ContentType "application/json" -Body '{
+  "price": "50600"
+}'
+
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-001/stop -ContentType "application/json" -Body '{
   "trigger_price": "50250",
   "reason": "manual support moved higher"
@@ -193,6 +198,8 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-
   "reason": "operator replaced exit plan manually"
 }'
 ```
+
+`POST /brackets/{signal_id}/preview` is signal-specific and paper-only. It runs the hypothetical mark against a deep copy of the selected paper bracket, returns only exits that would trigger for that bracket, and includes `distance_to_trigger`, `distance_to_trigger_pct`, and `trailing_activation_price` in the active-exit snapshot. It does not create orders, update P&L, record audit events, or mutate trailing stops on the active engine.
 
 Stop amendments are paper-only bracket maintenance events. A long bracket stop can only move upward, and a short bracket stop can only move downward. Attempts to loosen the stop return `409` and leave the bracket unchanged. Successful amendments record a synthetic `bracket_stop_amend` paper order plus a `bracket.stop_amended` audit event when SQLite persistence is configured, and those amendments replay after restart.
 
@@ -413,18 +420,19 @@ Paper market updates:
 - `POST /market/price/preview`
 - `GET /brackets`
 - `GET /brackets/{signal_id}`
+- `POST /brackets/{signal_id}/preview`
 - `POST /brackets/{signal_id}/stop`
 - `POST /brackets/{signal_id}/cancel`
 
-`POST /signals/preview` and `POST /signals/preview-text` return a `bracket_plan` object with the synthetic entry side, exit side, OCA group, trailing arming state, stop/take-profit/trailing triggers, estimated notional and quantity, worst-case stop loss, equity risk percent, and first-target reward/risk estimate that would apply if the signal were submitted.
+`POST /signals/preview` and `POST /signals/preview-text` return a `bracket_plan` object with the synthetic entry side, exit side, OCA group, trailing arming state, trailing activation price, stop/take-profit/trailing triggers, estimated notional and quantity, worst-case stop loss, equity risk percent, and first-target reward/risk estimate that would apply if the signal were submitted.
 
-`POST /backtest/signal` accepts a `signal` object plus a `prices` list, runs the signal through an isolated paper engine, marks each supplied price, and returns triggered exits, final paper P&L, final open notional, and final positions. It does not save orders, write audit events, or mutate the active engine.
+`POST /backtest/signal` accepts a `signal` object plus a `prices` list, runs the signal through an isolated paper engine, marks each supplied price, and returns triggered exits, active exit snapshots after each mark, final paper P&L, final open notional, and final positions. It does not save orders, write audit events, or mutate the active engine.
 
 `POST /market/price/preview` returns the paper exits that would trigger at a hypothetical mark without mutating orders, positions, audit history, daily P&L, or exposure. Use it before applying a mark when testing bracket and trailing-stop behavior.
 
-`POST /market/price` applies the mark, returns any triggered exits, refreshes account open notional through the trading engine, and returns the current `active_exits` snapshot, including ratcheted trailing-stop trigger prices, activation state, and water marks.
+`POST /market/price` applies the mark, returns any triggered exits, refreshes account open notional through the trading engine, and returns the current `active_exits` snapshot, including ratcheted trailing-stop trigger prices, activation state, activation price, trigger distance, and water marks.
 
-`GET /brackets` returns active synthetic paper brackets grouped by signal. `GET /brackets/{signal_id}` returns active synthetic paper exit legs for one signal. `POST /brackets/{signal_id}/stop` tightens a paper stop without loosening risk, persists an amendment order, and records audit context. `POST /brackets/{signal_id}/cancel` removes those synthetic exits, persists a cancellation order, and records audit context without closing the position.
+`GET /brackets` returns active synthetic paper brackets grouped by signal. `GET /brackets/{signal_id}` returns active synthetic paper exit legs for one signal. `POST /brackets/{signal_id}/preview` previews only that bracket against a mark without mutating active state. `POST /brackets/{signal_id}/stop` tightens a paper stop without loosening risk, persists an amendment order, and records audit context. `POST /brackets/{signal_id}/cancel` removes those synthetic exits, persists a cancellation order, and records audit context without closing the position.
 
 Operator controls:
 

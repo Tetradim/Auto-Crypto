@@ -83,6 +83,7 @@ def test_signal_preview_includes_synthetic_bracket_plan_for_short_trailing_order
     assert body["bracket_plan"]["entry_side"] == "sell"
     assert body["bracket_plan"]["exit_side"] == "buy"
     assert body["bracket_plan"]["trailing_starts_armed"] is False
+    assert body["bracket_plan"]["trailing_activation_price"] == "98.00"
     assert [(item["kind"], item["trigger_price"]) for item in body["bracket_plan"]["exits"]] == [
         ("stop_loss", "105.00"),
         ("take_profit", "90.00"),
@@ -141,6 +142,7 @@ def test_backtest_signal_replays_price_path_without_mutating_live_engine():
     body = response.json()
     assert body["status"] == "accepted"
     assert body["total_triggers"] == 1
+    assert body["marks"][0]["active_exits"]
     assert body["final_daily_pnl"] == "10"
     assert body["final_open_notional"] == "0"
     assert positions_after.json()["positions"] == []

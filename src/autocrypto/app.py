@@ -315,7 +315,7 @@ def create_app(
             "symbol": symbol,
             "price": str(price),
             "would_trigger": engine.exchange.preview_price(symbol, price),
-            "active_exits": _active_exits_to_dict(engine.exchange.lots),
+            "active_exits": _active_exits_to_dict(engine.exchange.lots, mark_price=price),
             "positions": engine.exchange.list_positions(),
             "account": _account_state_to_dict(engine.account_state),
         }
@@ -337,7 +337,7 @@ def create_app(
             "symbol": symbol,
             "price": str(price),
             "triggered": update.triggered,
-            "active_exits": _active_exits_to_dict(engine.exchange.lots),
+            "active_exits": _active_exits_to_dict(engine.exchange.lots, mark_price=price),
             "realized_pnl_delta": str(update.realized_pnl_delta),
             "daily_pnl": str(update.daily_pnl),
             "consecutive_losses": update.consecutive_losses,
@@ -355,6 +355,31 @@ def create_app(
         if not exits:
             raise HTTPException(status_code=404, detail="active bracket not found")
         return {"signal_id": signal_id, "active_exits": exits}
+
+    @app.post("/brackets/{signal_id}/preview")
+    async def bracket_preview(signal_id: str, request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            price = _positive_decimal(payload.get("price"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        lots = [
+            lot
+            for lot in engine.exchange.lots
+            if lot.signal_id == signal_id and lot.remaining_quantity > 0 and lot.exit_orders
+        ]
+        if not lots:
+            raise HTTPException(status_code=404, detail="active bracket not found")
+        symbol = lots[0].symbol
+        return {
+            "signal_id": signal_id,
+            "symbol": symbol,
+            "price": str(price),
+            "would_trigger": engine.exchange.preview_bracket(signal_id, price),
+            "active_exits": _active_exits_to_dict(lots, signal_id=signal_id, mark_price=price),
+            "positions": engine.exchange.list_positions(),
+            "account": _account_state_to_dict(engine.account_state),
+        }
 
     @app.post("/brackets/{signal_id}/stop")
     async def amend_bracket_stop(signal_id: str, request: Request) -> dict[str, Any]:
@@ -695,6 +720,7 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
     exits = build_exit_orders(signal)
     exit_side = "sell" if signal.side == "buy" else "buy"
     trailing_starts_armed = signal.trailing_stop_pct is not None and signal.trailing_activation_pct is None
+    trailing_activation_price = _planned_trailing_activation_price(signal)
     stop_exit = next((exit_order for exit_order in exits if exit_order.kind == "stop_loss"), None)
     first_target = next((exit_order for exit_order in exits if exit_order.kind == "take_profit"), None)
     estimated_quantity = (
@@ -709,6 +735,9 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
         "exit_side": exit_side,
         "oca_group": exits[0].oca_group if exits else None,
         "trailing_starts_armed": trailing_starts_armed,
+        "trailing_activation_price": _decimal_to_plain(trailing_activation_price)
+        if trailing_activation_price is not None
+        else None,
         "estimated_notional": _decimal_to_plain(decision.order_notional) if decision.order_notional is not None else None,
         "estimated_quantity": _decimal_to_plain(estimated_quantity) if estimated_quantity is not None else None,
         "worst_case_loss": _decimal_to_plain(worst_case_loss) if worst_case_loss is not None else None,
@@ -759,37 +788,77 @@ def _target_reward(signal: CryptoSignal, notional: Decimal | None, target_exit: 
     return target_notional * target_distance / signal.price
 
 
+def _planned_trailing_activation_price(signal: CryptoSignal) -> Decimal | None:
+    if signal.price is None or signal.trailing_stop_pct is None or signal.trailing_activation_pct is None:
+        return None
+    direction = Decimal("1") if signal.side == "buy" else Decimal("-1")
+    return signal.price * (Decimal("1") + direction * signal.trailing_activation_pct / Decimal("100"))
+
+
 def _decimal_to_plain(value: Decimal) -> str:
     return format(value, "f")
 
 
-def _active_exits_to_dict(lots: list[Any], *, signal_id: str | None = None) -> list[dict[str, str]]:
+def _active_exits_to_dict(
+    lots: list[Any],
+    *,
+    signal_id: str | None = None,
+    mark_price: Decimal | None = None,
+) -> list[dict[str, str | None]]:
     return [
-        {
-            "symbol": lot.symbol,
-            "direction": lot.direction,
-            "kind": exit_order.kind,
-            "trigger_price": str(exit_order.trigger_price),
-            "close_pct": str(exit_order.close_pct),
-            "oca_group": exit_order.oca_group,
-            "status": exit_order.status,
-            "trailing_stop_pct": str(lot.trailing_stop_pct) if exit_order.kind == "trailing_stop" and lot.trailing_stop_pct else None,
-            "trailing_activation_pct": str(lot.trailing_activation_pct)
-            if exit_order.kind == "trailing_stop" and lot.trailing_activation_pct
-            else None,
-            "trailing_activated": str(lot.trailing_activated).lower() if exit_order.kind == "trailing_stop" else None,
-            "high_water_mark": str(lot.high_water_mark) if exit_order.kind == "trailing_stop" and lot.high_water_mark else None,
-            "low_water_mark": str(lot.low_water_mark) if exit_order.kind == "trailing_stop" and lot.low_water_mark else None,
-            "breakeven_trigger_pct": str(lot.breakeven_trigger_pct) if lot.breakeven_trigger_pct else None,
-            "breakeven_applied": str(lot.breakeven_applied).lower(),
-            "signal_id": lot.signal_id,
-            "remaining_quantity": str(lot.remaining_quantity),
-            "entry_price": str(lot.entry_price),
-        }
+        _active_exit_to_dict(lot, exit_order, mark_price=mark_price)
         for lot in sorted(lots, key=lambda item: (item.symbol, item.signal_id))
         if lot.remaining_quantity > 0 and (signal_id is None or lot.signal_id == signal_id)
         for exit_order in lot.exit_orders
     ]
+
+
+def _active_exit_to_dict(lot: Any, exit_order: Any, *, mark_price: Decimal | None) -> dict[str, str | None]:
+    trailing_activation_price = _lot_trailing_activation_price(lot) if exit_order.kind == "trailing_stop" else None
+    distance = _exit_distance(lot, exit_order, mark_price) if mark_price is not None else None
+    return {
+        "symbol": lot.symbol,
+        "direction": lot.direction,
+        "kind": exit_order.kind,
+        "trigger_price": str(exit_order.trigger_price),
+        "close_pct": str(exit_order.close_pct),
+        "oca_group": exit_order.oca_group,
+        "status": exit_order.status,
+        "trailing_stop_pct": str(lot.trailing_stop_pct) if exit_order.kind == "trailing_stop" and lot.trailing_stop_pct else None,
+        "trailing_activation_pct": str(lot.trailing_activation_pct)
+        if exit_order.kind == "trailing_stop" and lot.trailing_activation_pct
+        else None,
+        "trailing_activation_price": str(trailing_activation_price) if trailing_activation_price is not None else None,
+        "trailing_activated": str(lot.trailing_activated).lower() if exit_order.kind == "trailing_stop" else None,
+        "high_water_mark": str(lot.high_water_mark) if exit_order.kind == "trailing_stop" and lot.high_water_mark else None,
+        "low_water_mark": str(lot.low_water_mark) if exit_order.kind == "trailing_stop" and lot.low_water_mark else None,
+        "distance_to_trigger": str(distance) if distance is not None else None,
+        "distance_to_trigger_pct": str(distance / mark_price * Decimal("100"))
+        if distance is not None and mark_price is not None and mark_price > 0
+        else None,
+        "breakeven_trigger_pct": str(lot.breakeven_trigger_pct) if lot.breakeven_trigger_pct else None,
+        "breakeven_applied": str(lot.breakeven_applied).lower(),
+        "signal_id": lot.signal_id,
+        "remaining_quantity": str(lot.remaining_quantity),
+        "entry_price": str(lot.entry_price),
+    }
+
+
+def _lot_trailing_activation_price(lot: Any) -> Decimal | None:
+    if lot.trailing_stop_pct is None or lot.trailing_activation_pct is None:
+        return None
+    direction = Decimal("1") if lot.direction == "long" else Decimal("-1")
+    return lot.entry_price * (Decimal("1") + direction * lot.trailing_activation_pct / Decimal("100"))
+
+
+def _exit_distance(lot: Any, exit_order: Any, mark_price: Decimal) -> Decimal:
+    if lot.direction == "long":
+        if exit_order.kind in {"stop_loss", "trailing_stop"}:
+            return mark_price - exit_order.trigger_price
+        return exit_order.trigger_price - mark_price
+    if exit_order.kind in {"stop_loss", "trailing_stop"}:
+        return exit_order.trigger_price - mark_price
+    return mark_price - exit_order.trigger_price
 
 
 def _active_brackets_to_dict(lots: list[Any]) -> list[dict[str, Any]]:

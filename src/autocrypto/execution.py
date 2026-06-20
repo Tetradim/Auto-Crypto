@@ -284,6 +284,24 @@ class PaperExchange:
         """Return paper exits that would trigger at price without mutating state."""
         return deepcopy(self).update_price(symbol, price)
 
+    def preview_bracket(self, signal_id: str, price: Decimal) -> list[dict]:
+        """Return exits that would trigger for one paper bracket without mutating state."""
+        sandbox = deepcopy(self)
+        target_lots = [
+            lot
+            for lot in sandbox.lots
+            if lot.signal_id == signal_id and lot.remaining_quantity > 0 and lot.exit_orders
+        ]
+        if not target_lots:
+            return []
+        symbol = target_lots[0].symbol
+        sandbox.lots = [
+            lot
+            for lot in sandbox.lots
+            if lot.signal_id == signal_id or lot.symbol != symbol
+        ]
+        return sandbox.update_price(symbol, price)
+
     def cancel_bracket(self, signal_id: str, *, reason: str = "") -> PaperOrder | None:
         """Cancel open synthetic bracket exits for a paper lot without closing exposure."""
         target_lots = [
