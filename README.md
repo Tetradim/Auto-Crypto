@@ -32,7 +32,7 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Lists all active synthetic paper brackets with remaining-notional, worst-case stop-loss, first-target reward, and aggregate bracket-risk summaries
 - Supports protective stop, trailing-stop, take-profit, and manual breakeven amendments; protective exits only tighten risk and take-profit targets only move farther into profit
 - Supports paper-only bracket close-by-signal controls that flatten or partially reduce the selected simulated bracket at an operator-supplied mark or at the current nearest protective trigger
-- Previews one active bracket by signal ID at a hypothetical mark, including trigger distance and trailing activation context
+- Previews one active bracket by signal ID at a hypothetical mark or through a multi-mark path, including trigger distance, trailing activation context, and simulated post-mark trailing ratchets without mutating live paper state
 - Shows a paper bracket exit ladder by signal ID with trigger order, estimated close quantity, estimated notional, estimated P&L, and optional mark-distance math for each stop, trailing, take-profit, or time-stop leg
 - Cancels active synthetic paper bracket exits by signal ID while leaving the underlying paper position open for separate manual management
 - Previews hypothetical market-price marks and bracket/trailing exits without mutating paper orders or positions, including simulated post-mark trailing-stop ratchets
@@ -239,6 +239,10 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-
   "price": "50600"
 }'
 
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-001/preview-path -ContentType "application/json" -Body '{
+  "prices": ["50600", "52400", "51100"]
+}'
+
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-001/stop -ContentType "application/json" -Body '{
   "trigger_price": "50250",
   "reason": "manual support moved higher"
@@ -279,6 +283,8 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-
 ```
 
 `POST /brackets/{signal_id}/preview` is signal-specific and paper-only. It runs the hypothetical mark against a deep copy of the selected paper bracket, returns only exits that would trigger for that bracket, and includes `distance_to_trigger`, `distance_to_trigger_pct`, and `trailing_activation_price` in the active-exit snapshot. It does not create orders, update P&L, record audit events, or mutate trailing stops on the active engine.
+
+`POST /brackets/{signal_id}/preview-path` is also signal-specific and paper-only. Send `prices` or `marks` as a non-empty list to replay several hypothetical marks through one deep-copied bracket state. The response includes each mark's `would_trigger` exits, `preview_active_exits` after that mark, simulated preview positions, and `mutates_state: false`; the live paper bracket, positions, audit log, and order history are unchanged. This is useful for reviewing whether an activation-gated or stepped trailing stop would ratchet before it would trigger.
 
 `GET /brackets/{signal_id}/exit-ladder` is also signal-specific and paper-only. It lists the bracket's synthetic exits in the direction they would be encountered by price, including each leg's intent, status, `close_pct`, estimated close quantity, estimated trigger notional, estimated P&L, and whether that leg would close the remaining paper lot. Add `?mark_price=...` to include current distance-to-trigger values without mutating trailing stops or recording any order.
 
@@ -531,6 +537,7 @@ Current bot work is guided by paper-first risk controls and exchange order behav
 - CCXT's current base order spec exposes `reduceOnly`, trigger prices, stop-loss, and take-profit parameters as exchange-dependent order fields, and Binance documents OCO/trailing order constraints such as equal OCO quantities and per-symbol trailing support; Auto-Crypto therefore labels `sell_to_close_long` vs `buy_to_cover_short` in `/signals/exchange-plan` and keeps reduce-only bracket fields as warnings instead of live placement instructions: <https://docs.ccxt.com/docs/base-spec> and <https://developers.binance.com/docs/binance-spot-api-docs/rest-api/trading-endpoints>
 - Coinbase's current Advanced Trade order guide describes bracket orders as a single sell order with linked limit and trigger prices where one side filling disables the other, and Coinbase Exchange TP/SL docs note only one TP/SL on one side; Auto-Crypto keeps staged or partial close plans paper-required and makes the close action explicit in the planning preview: <https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/guides/orders> and <https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/tpsl-orders>
 - Current backtesting guidance warns against look-ahead bias and unrealistic assumptions; Auto-Crypto persists `risk_pct`, `risk_amount`, and `max_hold_marks` through approval restarts so paper approvals replay the same rules that were originally reviewed instead of silently changing the test setup: <https://www.fortraders.com/blog/how-to-avoid-bias-in-backtesting>
+- Binance's current trailing-stop FAQ describes trailing stops as dynamic contingent orders that move with favorable price action and trigger on reversal, while Freqtrade's current stoploss docs note that trailing stop changes should only tighten risk; Auto-Crypto's bracket path preview therefore shows a step-by-step synthetic ratchet/trigger sequence on a copied paper bracket before any operator applies real paper marks: <https://developers.binance.com/docs/binance-spot-api-docs/faqs/trailing-stop-faq> and <https://www.freqtrade.io/en/stable/stoploss/>
 
 ## Environment Variables
 

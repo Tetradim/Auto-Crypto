@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -424,6 +425,58 @@ def create_app(
                 mark_price=price,
             ),
             "preview_positions": preview_exchange.list_positions() if preview_exchange is not None else [],
+            "positions": engine.exchange.list_positions(),
+            "account": _account_state_to_dict(engine.account_state),
+        }
+
+    @app.post("/brackets/{signal_id}/preview-path")
+    async def bracket_preview_path(signal_id: str, request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        marks_payload = payload.get("prices") or payload.get("marks") or []
+        if not isinstance(marks_payload, list) or not marks_payload:
+            raise HTTPException(status_code=400, detail="prices or marks must be a non-empty list")
+        try:
+            prices = [_positive_decimal(price) for price in marks_payload]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        lots = [
+            lot
+            for lot in engine.exchange.lots
+            if lot.signal_id == signal_id and lot.remaining_quantity > 0 and lot.exit_orders
+        ]
+        if not lots:
+            raise HTTPException(status_code=404, detail="active bracket not found")
+
+        symbol = lots[0].symbol
+        preview_exchange = deepcopy(engine.exchange)
+        preview_exchange.lots = [
+            lot for lot in preview_exchange.lots if lot.signal_id == signal_id or lot.symbol != symbol
+        ]
+        marks: list[dict[str, Any]] = []
+        for index, price in enumerate(prices, start=1):
+            triggered = preview_exchange.update_price(symbol, price)
+            marks.append(
+                {
+                    "index": index,
+                    "price": str(price),
+                    "would_trigger": triggered,
+                    "preview_active_exits": _active_exits_to_dict(
+                        preview_exchange.lots,
+                        signal_id=signal_id,
+                        mark_price=price,
+                    ),
+                    "preview_positions": preview_exchange.list_positions(),
+                }
+            )
+
+        return {
+            "signal_id": signal_id,
+            "symbol": symbol,
+            "mutates_state": False,
+            "prices": [str(price) for price in prices],
+            "active_exits": _active_exits_to_dict(lots, signal_id=signal_id),
+            "marks": marks,
+            "final_preview_positions": preview_exchange.list_positions(),
             "positions": engine.exchange.list_positions(),
             "account": _account_state_to_dict(engine.account_state),
         }

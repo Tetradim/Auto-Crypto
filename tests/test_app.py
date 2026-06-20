@@ -740,3 +740,67 @@ def test_short_bracket_exit_ladder_uses_buyback_pnl_direction():
     assert rows[1]["estimated_pnl"] == "10.00"
     assert rows[1]["distance_to_trigger"] == "8.00"
     assert rows[2]["marks_remaining"] == 2
+
+
+def test_bracket_preview_path_replays_trailing_marks_without_mutating_active_bracket():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "preview-path-trail",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "8",
+            "take_profit_pct": "20",
+            "trailing_stop_pct": "5",
+        },
+    )
+
+    response = client.post("/brackets/preview-path-trail/preview-path", json={"prices": ["110", "104.50"]})
+    active_after = client.get("/brackets/preview-path-trail").json()["active_exits"]
+    live_trailing = next(exit_order for exit_order in active_after if exit_order["kind"] == "trailing_stop")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mutates_state"] is False
+    assert body["marks"][0]["would_trigger"] == []
+    preview_trailing = next(
+        exit_order
+        for exit_order in body["marks"][0]["preview_active_exits"]
+        if exit_order["kind"] == "trailing_stop"
+    )
+    assert preview_trailing["trigger_price"] == "104.50"
+    assert body["marks"][1]["would_trigger"] == [
+        {"symbol": "BTC/USDT", "kind": "trailing_stop", "price": "104.50000000", "quantity": "1.00000000"}
+    ]
+    assert body["marks"][1]["preview_active_exits"] == []
+    assert body["final_preview_positions"][0]["quantity"] == "0.00000000"
+    assert live_trailing["trigger_price"] == "95.00"
+    assert client.get("/positions").json()["positions"][0]["quantity"] == "1.00000000"
+
+
+def test_bracket_preview_path_rejects_empty_mark_list():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "empty-preview-path",
+            "symbol": "ETHUSDT",
+            "side": "short",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+    )
+
+    response = client.post("/brackets/empty-preview-path/preview-path", json={"prices": []})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "prices or marks must be a non-empty list"
