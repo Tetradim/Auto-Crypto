@@ -264,6 +264,8 @@ def _active_exits_snapshot(lots: list) -> list[dict]:
             "trailing_activation_price": str(lot.trailing_activation_price)
             if exit_order.kind == "trailing_stop" and lot.trailing_activation_price
             else None,
+            "trail_after_take_profit": lot.trail_after_take_profit if exit_order.kind == "trailing_stop" else None,
+            "take_profit_filled": lot.take_profit_filled if exit_order.kind == "trailing_stop" else None,
             "trailing_activated": lot.trailing_activated if exit_order.kind == "trailing_stop" else None,
             "high_water_mark": str(lot.high_water_mark) if exit_order.kind == "trailing_stop" and lot.high_water_mark else None,
             "low_water_mark": str(lot.low_water_mark) if exit_order.kind == "trailing_stop" and lot.low_water_mark else None,

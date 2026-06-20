@@ -145,6 +145,34 @@ def test_signal_preview_includes_trailing_step_controls():
     assert trailing_exit["trailing_step_pct"] == "1"
 
 
+def test_signal_preview_marks_trailing_stop_waiting_for_take_profit():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/signals/preview",
+        json={
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "trailing_stop_pct": "4",
+            "trail_after_take_profit": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    trailing_exit = next(exit_order for exit_order in body["bracket_plan"]["exits"] if exit_order["kind"] == "trailing_stop")
+    assert body["signal"]["trail_after_take_profit"] is True
+    assert body["bracket_plan"]["trailing_starts_armed"] is False
+    assert body["bracket_plan"]["trail_after_take_profit"] is True
+    assert trailing_exit["status"] == "pending_take_profit"
+    assert trailing_exit["trail_after_take_profit"] is True
+
+
 def test_signal_preview_includes_time_stop_mark_plan():
     app = create_app()
     client = TestClient(app)

@@ -206,6 +206,8 @@ def _plan_warnings(exit_orders: list[ExitOrder], capabilities: ExchangeCapabilit
         warnings.append("create_order_not_advertised")
     if any(exit_order.kind == "trailing_stop" and exit_order.status == "pending_activation" for exit_order in exit_orders):
         warnings.append("trailing_stop_starts_pending_activation")
+    if any(exit_order.kind == "trailing_stop" and exit_order.status == "pending_take_profit" for exit_order in exit_orders):
+        warnings.append("trailing_stop_waits_for_take_profit")
     if _has_non_portable_exit_shape(exit_orders) and capabilities.exchange_id != "paper":
         warnings.append("staged_or_partial_exits_require_paper_or_custom_native_mapping")
     if any(exit_order.kind == "time_exit" for exit_order in exit_orders) and capabilities.exchange_id != "paper":
@@ -230,7 +232,12 @@ def _plan_summary(exit_orders: list[ExitOrder]) -> dict[str, Any]:
         "pending_trailing_stop_count": sum(
             1
             for exit_order in exit_orders
-            if exit_order.kind == "trailing_stop" and exit_order.status == "pending_activation"
+            if exit_order.kind == "trailing_stop" and exit_order.status in {"pending_activation", "pending_take_profit"}
+        ),
+        "take_profit_gated_trailing_stop_count": sum(
+            1
+            for exit_order in exit_orders
+            if exit_order.kind == "trailing_stop" and exit_order.status == "pending_take_profit"
         ),
         "time_exit_count": sum(1 for exit_order in exit_orders if exit_order.kind == "time_exit"),
         "take_profit_close_pct": str(take_profit_close_pct),
@@ -267,6 +274,8 @@ def _trailing_params(signal: CryptoSignal, exit_order: ExitOrder) -> dict[str, A
         params["activationPct"] = str(signal.trailing_activation_pct)
     if signal.trailing_activation_price is not None:
         params["activationPrice"] = str(signal.trailing_activation_price)
+    if signal.trail_after_take_profit:
+        params["trailAfterTakeProfit"] = True
     return params
 
 
@@ -287,6 +296,7 @@ def _has_non_portable_exit_shape(exit_orders: list[ExitOrder]) -> bool:
             for exit_order in exit_orders
         )
         or any(exit_order.kind == "time_exit" for exit_order in exit_orders)
+        or any(exit_order.kind == "trailing_stop" and exit_order.status == "pending_take_profit" for exit_order in exit_orders)
     )
 
 

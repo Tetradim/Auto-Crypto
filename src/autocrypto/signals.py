@@ -45,6 +45,7 @@ class CryptoSignal:
     trailing_step_amount: Decimal | None = None
     trailing_activation_pct: Decimal | None = None
     trailing_activation_price: Decimal | None = None
+    trail_after_take_profit: bool = False
     breakeven_trigger_pct: Decimal | None = None
     breakeven_after_take_profit: bool = False
     max_hold_marks: int | None = None
@@ -126,6 +127,10 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
     trailing_activation_price = _optional_positive_decimal(
         _field(payload, bracket, "trailing_activation_price", "trail_activation_price", "activation_price")
     )
+    trail_after_take_profit = _bool(
+        _field(payload, bracket, "trail_after_take_profit", "trailing_after_take_profit", "trail_after_tp"),
+        default=False,
+    )
     breakeven_trigger_pct = _optional_positive_decimal(_field(payload, bracket, "breakeven_trigger_pct"))
     breakeven_after_take_profit = _bool(
         _field(payload, bracket, "breakeven_after_take_profit", "move_stop_to_breakeven_after_tp"),
@@ -172,6 +177,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         "trailing_activation_price": str(trailing_activation_price)
         if trailing_activation_price is not None
         else None,
+        "trail_after_take_profit": trail_after_take_profit,
         "breakeven_trigger_pct": str(breakeven_trigger_pct) if breakeven_trigger_pct is not None else None,
         "breakeven_after_take_profit": breakeven_after_take_profit,
         "max_hold_marks": max_hold_marks,
@@ -208,6 +214,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         trailing_step_amount=trailing_step_amount,
         trailing_activation_pct=trailing_activation_pct,
         trailing_activation_price=trailing_activation_price,
+        trail_after_take_profit=trail_after_take_profit,
         breakeven_trigger_pct=breakeven_trigger_pct,
         breakeven_after_take_profit=breakeven_after_take_profit,
         max_hold_marks=max_hold_marks,

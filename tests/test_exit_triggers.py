@@ -262,6 +262,127 @@ def test_partial_trailing_stop_reduces_long_lot_and_keeps_other_exits():
     assert exchange.list_positions()[0]["realized_pnl"] == "13.80000000"
 
 
+def test_trailing_stop_can_wait_until_first_long_take_profit_fills():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "trail-after-tp-long",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "8",
+            "take_profit_targets": [
+                {"pct": "10", "close_pct": "50"},
+                {"pct": "30", "close_pct": "50"},
+            ],
+            "trailing_stop_pct": "5",
+            "trail_after_take_profit": True,
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    dormant_trail = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    before_target = exchange.update_price("BTC/USDT", Decimal("109"))
+    first_target = exchange.update_price("BTC/USDT", Decimal("110"))
+    active_trail = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    pullback = exchange.update_price("BTC/USDT", Decimal("104.50"))
+
+    assert dormant_trail.status == "pending_take_profit"
+    assert before_target == []
+    assert first_target == [
+        {"symbol": "BTC/USDT", "kind": "take_profit", "price": "110.00000000", "quantity": "0.50000000"}
+    ]
+    assert active_trail.status == "open"
+    assert active_trail.trigger_price == Decimal("104.50")
+    assert pullback == [
+        {"symbol": "BTC/USDT", "kind": "trailing_stop", "price": "104.50000000", "quantity": "0.50000000"}
+    ]
+    assert exchange.list_positions()[0]["quantity"] == "0.00000000"
+
+
+def test_trailing_stop_can_wait_until_first_short_take_profit_fills():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "trail-after-tp-short",
+            "symbol": "ETH/USDT",
+            "side": "short",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "8",
+            "take_profit_targets": [
+                {"pct": "10", "close_pct": "50"},
+                {"pct": "30", "close_pct": "50"},
+            ],
+            "trailing_stop_pct": "5",
+            "trail_after_take_profit": True,
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    before_target = exchange.update_price("ETH/USDT", Decimal("91"))
+    first_target = exchange.update_price("ETH/USDT", Decimal("90"))
+    active_trail = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    bounce = exchange.update_price("ETH/USDT", Decimal("94.50"))
+
+    assert before_target == []
+    assert first_target == [
+        {"symbol": "ETH/USDT", "kind": "take_profit", "price": "90.00000000", "quantity": "0.50000000"}
+    ]
+    assert active_trail.status == "open"
+    assert active_trail.trigger_price == Decimal("94.50")
+    assert bounce == [
+        {"symbol": "ETH/USDT", "kind": "trailing_stop", "price": "94.50000000", "quantity": "0.50000000"}
+    ]
+    assert exchange.orders[-1].side == "buy"
+
+
+def test_take_profit_gated_trailing_does_not_loosen_breakeven_lock():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "trail-after-tp-with-breakeven",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "8",
+            "take_profit_targets": [
+                {"pct": "2", "close_pct": "50"},
+                {"pct": "12", "close_pct": "50"},
+            ],
+            "trailing_stop_pct": "5",
+            "trail_after_take_profit": True,
+            "breakeven_after_take_profit": True,
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    triggered = exchange.update_price("BTC/USDT", Decimal("102"))
+    stop_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "stop_loss")
+    trailing_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+
+    assert triggered == [
+        {
+            "symbol": "BTC/USDT",
+            "kind": "take_profit",
+            "price": "102.00000000",
+            "quantity": "0.50000000",
+            "breakeven_after_take_profit": "true",
+        }
+    ]
+    assert stop_exit.trigger_price == Decimal("100.00")
+    assert trailing_exit.trigger_price == Decimal("100.00")
+    assert trailing_exit.status == "open"
+
+
 def test_paper_bracket_time_exit_closes_after_max_hold_marks():
     exchange = PaperExchange()
     engine = TradingEngine(exchange=exchange)

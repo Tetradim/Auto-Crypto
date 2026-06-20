@@ -100,6 +100,7 @@ def test_normalizes_nested_bracket_order_payload():
                 ],
                 "trailing_stop_pct": "4",
                 "trailing_activation_pct": "2",
+                "trail_after_take_profit": True,
                 "breakeven_trigger_pct": "1.5",
                 "breakeven_after_take_profit": True,
             },
@@ -115,6 +116,7 @@ def test_normalizes_nested_bracket_order_payload():
     assert signal.trailing_stop_pct == Decimal("4")
     assert signal.trailing_stop_price is None
     assert signal.trailing_activation_pct == Decimal("2")
+    assert signal.trail_after_take_profit is True
     assert signal.breakeven_trigger_pct == Decimal("1.5")
     assert signal.breakeven_after_take_profit is True
 

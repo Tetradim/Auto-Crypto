@@ -132,6 +132,10 @@ def evaluate_signal(
         and signal.trailing_stop_amount is None
     ):
         reasons.append("trailing_stop_required_for_activation")
+    if signal.trail_after_take_profit and signal.trailing_stop_pct is None and signal.trailing_stop_amount is None:
+        reasons.append("trailing_stop_required_for_take_profit_delay")
+    if signal.trail_after_take_profit and not signal.take_profit_targets:
+        reasons.append("trail_after_take_profit_requires_take_profit")
     if signal.trailing_activation_pct is not None and signal.trailing_activation_price is not None:
         reasons.append("duplicate_trailing_activation")
     if signal.trailing_stop_price is not None and signal.trailing_stop_pct is None and signal.trailing_stop_amount is None:

@@ -189,6 +189,47 @@ def test_order_planner_marks_pending_and_partial_trailing_stop_metadata():
     assert plan.summary["has_partial_trailing_exit"] is True
 
 
+def test_order_planner_marks_take_profit_gated_trailing_as_paper_mapping():
+    signal = normalize_signal(
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "trailing_stop_pct": "4",
+            "trail_after_take_profit": True,
+        },
+        source="test",
+    )
+    capabilities = ExchangeCapabilities(
+        exchange_id="coinbase",
+        spot=True,
+        margin=False,
+        swap=False,
+        future=False,
+        option=False,
+        create_order=True,
+        cancel_order=True,
+        fetch_balance=True,
+        attached_stop_loss_take_profit=True,
+        oco_order=True,
+        trailing_order=True,
+        reduce_only=True,
+    )
+
+    plan = plan_bracket_execution(signal, capabilities)
+    trailing = next(exit_leg for exit_leg in plan.exits if exit_leg.role == "trailing_stop")
+
+    assert plan.strategy == "paper_required_for_staged_or_partial_bracket"
+    assert trailing.activation_status == "pending_take_profit"
+    assert trailing.params["trailing"]["trailAfterTakeProfit"] is True
+    assert "trailing_stop_waits_for_take_profit" in plan.warnings
+    assert plan.summary["take_profit_gated_trailing_stop_count"] == 1
+    assert plan.summary["requires_custom_native_mapping"] is True
+
+
 def test_signal_exchange_plan_endpoint_returns_non_executing_paper_plan():
     client = TestClient(create_app())
 

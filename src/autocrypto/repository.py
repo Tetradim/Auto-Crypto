@@ -249,6 +249,7 @@ def _signal_to_dict(signal: CryptoSignal) -> dict[str, Any]:
         "trailing_activation_price": str(signal.trailing_activation_price)
         if signal.trailing_activation_price is not None
         else None,
+        "trail_after_take_profit": signal.trail_after_take_profit,
         "breakeven_trigger_pct": str(signal.breakeven_trigger_pct)
         if signal.breakeven_trigger_pct is not None
         else None,
@@ -301,6 +302,7 @@ def _pending_summary(signal: CryptoSignal, *, created_at: str | None = None) -> 
         "trailing_activation_price": str(signal.trailing_activation_price)
         if signal.trailing_activation_price is not None
         else None,
+        "trail_after_take_profit": signal.trail_after_take_profit,
         "breakeven_trigger_pct": str(signal.breakeven_trigger_pct)
         if signal.breakeven_trigger_pct is not None
         else None,

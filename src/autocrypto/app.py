@@ -1135,6 +1135,7 @@ def _signal_to_dict(signal: CryptoSignal) -> dict[str, Any]:
         "trailing_activation_price": str(signal.trailing_activation_price)
         if signal.trailing_activation_price is not None
         else None,
+        "trail_after_take_profit": signal.trail_after_take_profit,
         "breakeven_trigger_pct": str(signal.breakeven_trigger_pct)
         if signal.breakeven_trigger_pct is not None
         else None,
@@ -1193,6 +1194,7 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
         (signal.trailing_stop_pct is not None or signal.trailing_stop_amount is not None)
         and signal.trailing_activation_pct is None
         and signal.trailing_activation_price is None
+        and not signal.trail_after_take_profit
     )
     trailing_activation_price = _planned_trailing_activation_price(signal)
     stop_exit = next((exit_order for exit_order in exits if exit_order.kind == "stop_loss"), None)
@@ -1213,6 +1215,7 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
         "trailing_activation_price": _decimal_to_plain(trailing_activation_price)
         if trailing_activation_price is not None
         else None,
+        "trail_after_take_profit": signal.trail_after_take_profit,
         "breakeven_after_take_profit": signal.breakeven_after_take_profit,
         "max_hold_marks": signal.max_hold_marks,
         "estimated_notional": _decimal_to_plain(decision.order_notional) if decision.order_notional is not None else None,
@@ -1241,6 +1244,9 @@ def _bracket_plan_to_dict(signal: CryptoSignal, decision: RiskDecision, account_
                 else None,
                 "trailing_step_amount": str(signal.trailing_step_amount)
                 if exit_order.kind == "trailing_stop" and signal.trailing_step_amount is not None
+                else None,
+                "trail_after_take_profit": signal.trail_after_take_profit
+                if exit_order.kind == "trailing_stop"
                 else None,
                 "max_hold_marks": signal.max_hold_marks if exit_order.kind == "time_exit" else None,
             }
@@ -1352,6 +1358,12 @@ def _active_exit_to_dict(lot: Any, exit_order: Any, *, mark_price: Decimal | Non
         else None,
         "configured_trailing_activation_price": str(lot.trailing_activation_price)
         if exit_order.kind == "trailing_stop" and lot.trailing_activation_price
+        else None,
+        "trail_after_take_profit": str(lot.trail_after_take_profit).lower()
+        if exit_order.kind == "trailing_stop"
+        else None,
+        "take_profit_filled": str(lot.take_profit_filled).lower()
+        if exit_order.kind == "trailing_stop"
         else None,
         "trailing_activation_price": str(trailing_activation_price) if trailing_activation_price is not None else None,
         "computed_trailing_activation_price": str(trailing_activation_price)
