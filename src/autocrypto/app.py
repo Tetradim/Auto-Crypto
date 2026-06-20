@@ -357,6 +357,10 @@ def create_app(
     def bracket_risk_summary() -> dict[str, Any]:
         return {"summary": _bracket_risk_summary(engine.exchange.lots)}
 
+    @app.get("/brackets/health")
+    def bracket_health() -> dict[str, Any]:
+        return {"health": _bracket_health(engine.exchange.lots)}
+
     @app.get("/brackets/{signal_id}")
     def bracket_status(signal_id: str) -> dict[str, Any]:
         lots = [
@@ -591,6 +595,52 @@ def create_app(
         return {
             "status": "amended",
             "signal_id": signal_id,
+            "order": order.to_dict(),
+            "active_exits": _active_exits_to_dict(engine.exchange.lots, signal_id=signal_id),
+            "positions": engine.exchange.list_positions(),
+            "account": _account_state_to_dict(engine.account_state),
+        }
+
+    @app.post("/brackets/{signal_id}/lock-profit")
+    async def lock_bracket_profit(signal_id: str, request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            lock_profit_pct = _positive_decimal(payload.get("lock_profit_pct") or payload.get("profit_lock_pct"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        reason = str(payload.get("reason") or "manual lock protective exits into profit")
+        order = engine.exchange.lock_bracket_profit(signal_id, lock_profit_pct, reason=reason)
+        if order is None:
+            raise HTTPException(
+                status_code=409,
+                detail="active bracket not found, no protective exit found, or profit lock would loosen risk",
+            )
+        engine.account_state.open_notional = engine.exchange.open_notional()
+        if repository:
+            repository.save_order(order)
+            repository.record_audit(
+                "bracket.profit_locked",
+                {
+                    "signal_id": signal_id,
+                    "reason": reason,
+                    "lock_profit_pct": str(lock_profit_pct),
+                    "lock_price": str(order.price),
+                    "exit_orders": [
+                        {
+                            "kind": exit_order.kind,
+                            "trigger_price": str(exit_order.trigger_price),
+                            "close_pct": str(exit_order.close_pct),
+                            "oca_group": exit_order.oca_group,
+                            "status": exit_order.status,
+                        }
+                        for exit_order in order.exit_orders
+                    ],
+                },
+            )
+        return {
+            "status": "amended",
+            "signal_id": signal_id,
+            "lock_profit_pct": str(lock_profit_pct),
             "order": order.to_dict(),
             "active_exits": _active_exits_to_dict(engine.exchange.lots, signal_id=signal_id),
             "positions": engine.exchange.list_positions(),
@@ -1544,6 +1594,59 @@ def _bracket_risk_summary(lots: list[Any]) -> dict[str, Any]:
         "time_stop_count": sum(1 for lot in active_lots for exit_order in lot.exit_orders if exit_order.kind == "time_exit"),
         "totals": _bracket_totals_to_dict(totals),
         "by_symbol": [_bracket_totals_to_dict(by_symbol[symbol]) for symbol in sorted(by_symbol)],
+    }
+
+
+def _bracket_health(lots: list[Any]) -> dict[str, Any]:
+    active_lots = [lot for lot in lots if lot.remaining_quantity > 0 and lot.exit_orders]
+    rows = [_bracket_health_row(lot) for lot in sorted(active_lots, key=lambda item: (item.symbol, item.signal_id))]
+    issue_counts: dict[str, int] = {}
+    for row in rows:
+        for issue in row["issues"]:
+            issue_counts[issue] = issue_counts.get(issue, 0) + 1
+    return {
+        "bracket_count": len(rows),
+        "healthy_count": sum(1 for row in rows if row["status"] == "healthy"),
+        "attention_count": sum(1 for row in rows if row["status"] == "attention"),
+        "issue_counts": issue_counts,
+        "brackets": rows,
+    }
+
+
+def _bracket_health_row(lot: Any) -> dict[str, Any]:
+    summary = _bracket_summary(lot)
+    protective_exit = _nearest_protective_exit(lot)
+    open_take_profit_count = sum(
+        1 for exit_order in lot.exit_orders if exit_order.kind == "take_profit" and exit_order.status == "open"
+    )
+    pending_trailing_count = sum(
+        1
+        for exit_order in lot.exit_orders
+        if exit_order.kind == "trailing_stop" and exit_order.status in {"pending_activation", "pending_take_profit"}
+    )
+    issues: list[str] = []
+    if protective_exit is None:
+        issues.append("no_open_protective_exit")
+    elif _decimal_or_zero(summary["worst_case_loss"]) > 0:
+        issues.append("protective_exit_still_at_risk")
+    if pending_trailing_count:
+        issues.append("trailing_stop_pending")
+    if open_take_profit_count == 0:
+        issues.append("no_open_take_profit_exit")
+    return {
+        "signal_id": lot.signal_id,
+        "symbol": lot.symbol,
+        "direction": lot.direction,
+        "status": "attention" if issues else "healthy",
+        "issues": issues,
+        "remaining_quantity": str(lot.remaining_quantity),
+        "remaining_notional": summary["remaining_notional"],
+        "protective_exit_kind": summary["protective_exit_kind"],
+        "protective_trigger_price": summary["protective_trigger_price"],
+        "worst_case_loss": summary["worst_case_loss"],
+        "protective_locked_pnl": summary["protective_locked_pnl"],
+        "open_take_profit_count": open_take_profit_count,
+        "pending_trailing_count": pending_trailing_count,
     }
 
 

@@ -335,6 +335,41 @@ def test_app_replays_breakeven_amendment_after_restart(tmp_path):
     ]
 
 
+def test_app_replays_profit_lock_amendment_after_restart(tmp_path):
+    db_path = tmp_path / "profit_lock_replay.sqlite3"
+    first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "replay-profit-lock",
+            "symbol": "SOLUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "trailing_stop_pct": "4",
+        },
+    )
+    amended = first_client.post("/brackets/replay-profit-lock/lock-profit", json={"lock_profit_pct": "2"})
+
+    second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    bracket = second_client.get("/brackets/replay-profit-lock").json()
+    triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "102"})
+    stop_exit = next(exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "stop_loss")
+    trailing_exit = next(exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "trailing_stop")
+
+    assert amended.status_code == 200
+    assert amended.json()["order"]["exit_kind"] == "bracket_profit_lock"
+    assert stop_exit["trigger_price"] == "102.00"
+    assert trailing_exit["trigger_price"] == "102.00"
+    assert bracket["summary"]["worst_case_loss"] == "0"
+    assert bracket["summary"]["protective_locked_pnl"] == "2.00"
+    assert triggered.json()["triggered"] == [
+        {"symbol": "SOL/USDT", "kind": "stop_loss", "price": "102.00000000", "quantity": "1.00000000"}
+    ]
+
+
 def test_app_closes_bracket_with_audit_and_replays_after_restart(tmp_path):
     db_path = tmp_path / "bracket_close_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))

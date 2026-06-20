@@ -598,6 +598,74 @@ def test_bracket_risk_summary_aggregates_long_short_and_trailing_counts():
     assert [row["symbol"] for row in summary["by_symbol"]] == ["BTC/USDT", "ETH/USDT"]
 
 
+def test_bracket_health_flags_pending_trailing_and_missing_take_profit():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "health-pending-trail",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "trailing_stop_pct": "4",
+            "trailing_activation_pct": "2",
+        },
+    )
+
+    response = client.get("/brackets/health")
+
+    assert response.status_code == 200
+    health = response.json()["health"]
+    assert health["attention_count"] == 1
+    assert health["issue_counts"] == {
+        "protective_exit_still_at_risk": 1,
+        "trailing_stop_pending": 1,
+        "no_open_take_profit_exit": 1,
+    }
+    assert health["brackets"][0]["status"] == "attention"
+    assert health["brackets"][0]["protective_trigger_price"] == "95.00"
+
+
+def test_lock_profit_moves_protective_exits_beyond_entry_without_live_execution():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "lock-profit-long",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "20",
+            "trailing_stop_pct": "4",
+        },
+    )
+    response = client.post(
+        "/brackets/lock-profit-long/lock-profit",
+        json={"lock_profit_pct": "2", "reason": "paper lock after breakout"},
+    )
+    loosen = client.post("/brackets/lock-profit-long/lock-profit", json={"lock_profit_pct": "1"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["order"]["mode"] == "paper"
+    assert body["order"]["exit_kind"] == "bracket_profit_lock"
+    assert body["order"]["reduce_only"] is False
+    protective = [exit_order for exit_order in body["active_exits"] if exit_order["kind"] in {"stop_loss", "trailing_stop"}]
+    assert [(exit_order["kind"], exit_order["trigger_price"], exit_order["status"]) for exit_order in protective] == [
+        ("stop_loss", "102.00", "open"),
+        ("trailing_stop", "102.00", "open"),
+    ]
+    assert loosen.status_code == 409
+
+
 def test_bracket_exit_ladder_reports_staged_and_partial_trailing_quantities():
     app = create_app()
     client = TestClient(app)

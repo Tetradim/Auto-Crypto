@@ -726,6 +726,57 @@ class PaperExchange:
         self._refresh_active_exits(first_lot.symbol)
         return order
 
+    def lock_bracket_profit(
+        self,
+        signal_id: str,
+        lock_profit_pct: Decimal,
+        *,
+        reason: str = "",
+    ) -> PaperOrder | None:
+        """Move open protective paper exits beyond entry without loosening risk."""
+        if lock_profit_pct <= 0:
+            return None
+        target_lots = [
+            lot
+            for lot in self.lots
+            if lot.signal_id == signal_id and lot.remaining_quantity > 0 and lot.exit_orders
+        ]
+        if not target_lots:
+            return None
+
+        amended_exits: list[ExitOrder] = []
+        for lot in target_lots:
+            updated_exit_orders, lot_amendments = _profit_lock_exit_amendments(lot, lock_profit_pct)
+            if not lot_amendments:
+                continue
+            lot.exit_orders = updated_exit_orders
+            for amendment in lot_amendments:
+                if amendment.kind == "trailing_stop":
+                    _sync_trailing_water_mark(lot, amendment.trigger_price)
+            amended_exits.extend(lot_amendments)
+
+        if not amended_exits:
+            return None
+
+        first_lot = target_lots[0]
+        lock_price = _profit_lock_price(first_lot, lock_profit_pct)
+        order = PaperOrder(
+            order_id=f"paper-lock-profit-{_order_fragment(signal_id)}-{len(self.orders) + 1}",
+            signal_id=signal_id,
+            mode="paper",
+            exchange="paper",
+            symbol=first_lot.symbol,
+            side="amend",
+            notional=Decimal("0"),
+            price=lock_price,
+            exit_orders=amended_exits,
+            exit_kind="bracket_profit_lock",
+            status="amended",
+        )
+        self.orders.append(order)
+        self._refresh_active_exits(first_lot.symbol)
+        return order
+
     def _fill_quantity(self, signal: CryptoSignal, notional: Decimal, fill_price: Decimal) -> Decimal:
         return signal.base_amount if signal.base_amount is not None else notional / fill_price
 
@@ -852,6 +903,9 @@ class PaperExchange:
             return
         if order.exit_kind == "bracket_breakeven":
             self._replay_bracket_breakeven(order)
+            return
+        if order.exit_kind == "bracket_profit_lock":
+            self._replay_bracket_profit_lock(order)
             return
         if order.price is None:
             return
@@ -996,6 +1050,19 @@ class PaperExchange:
                 if amendments:
                     lot.exit_orders = updated_exit_orders
                     lot.breakeven_applied = True
+                    for amendment in amendments:
+                        if amendment.kind == "trailing_stop":
+                            _sync_trailing_water_mark(lot, amendment.trigger_price)
+        self._refresh_active_exits(order.symbol)
+
+    def _replay_bracket_profit_lock(self, order: PaperOrder) -> None:
+        if order.price is None:
+            return
+        for lot in self.lots:
+            if lot.signal_id == order.signal_id and lot.remaining_quantity > 0:
+                updated_exit_orders, amendments = _protective_exit_price_amendments(lot, order.price)
+                if amendments:
+                    lot.exit_orders = updated_exit_orders
                     for amendment in amendments:
                         if amendment.kind == "trailing_stop":
                             _sync_trailing_water_mark(lot, amendment.trigger_price)
@@ -1534,6 +1601,47 @@ def _breakeven_exit_amendments(lot: PaperLot) -> tuple[list[ExitOrder], list[Exi
         updated.append(amendment)
         amendments.append(amendment)
     return updated, amendments
+
+
+def _profit_lock_exit_amendments(
+    lot: PaperLot,
+    lock_profit_pct: Decimal,
+) -> tuple[list[ExitOrder], list[ExitOrder]]:
+    return _protective_exit_price_amendments(lot, _profit_lock_price(lot, lock_profit_pct))
+
+
+def _protective_exit_price_amendments(
+    lot: PaperLot,
+    trigger_price: Decimal,
+) -> tuple[list[ExitOrder], list[ExitOrder]]:
+    trigger_price = _money(trigger_price)
+    amendments: list[ExitOrder] = []
+    updated: list[ExitOrder] = []
+    for exit_order in lot.exit_orders:
+        if exit_order.kind not in {"stop_loss", "trailing_stop"}:
+            updated.append(exit_order)
+            continue
+        if lot.direction == "long" and trigger_price <= exit_order.trigger_price:
+            updated.append(exit_order)
+            continue
+        if lot.direction == "short" and trigger_price >= exit_order.trigger_price:
+            updated.append(exit_order)
+            continue
+        amendment = ExitOrder(
+            kind=exit_order.kind,
+            trigger_price=trigger_price,
+            close_pct=exit_order.close_pct,
+            oca_group=exit_order.oca_group,
+            status="open",
+        )
+        updated.append(amendment)
+        amendments.append(amendment)
+    return updated, amendments
+
+
+def _profit_lock_price(lot: PaperLot, lock_profit_pct: Decimal) -> Decimal:
+    direction = Decimal("1") if lot.direction == "long" else Decimal("-1")
+    return _money(lot.entry_price * (Decimal("1") + direction * lock_profit_pct / Decimal("100")))
 
 
 def _sync_trailing_water_mark(lot: PaperLot, trigger_price: Decimal) -> None:
