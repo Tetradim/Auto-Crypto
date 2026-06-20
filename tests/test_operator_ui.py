@@ -102,6 +102,14 @@ def test_operator_ui_is_served_from_backend():
     assert "trimQuantity" in script.text
     assert "loadSignalTicket" in script.text
     assert "trigger-exit-price" in script.text
+    assert "preview-bracket" in script.text
+    assert "amend-bracket-stop" in script.text
+    assert "cancel-bracket" in script.text
+    assert "previewBracket" in script.text
+    assert "amendBracketStop" in script.text
+    assert "cancelBracket" in script.text
+    assert "operator UI stop tighten" in script.text
+    assert "operator UI bracket cancel" in script.text
     assert "Unrealized" in script.text
     assert "haltReasonInput" in script.text
     assert "exportAuditCsv" in script.text

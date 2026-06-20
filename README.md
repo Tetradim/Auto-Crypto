@@ -30,7 +30,7 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Previews server-side risk decisions from the operator UI without placing orders
 - Backtests one signal against a supplied paper mark-price path and returns active exit snapshots after each mark without mutating the live in-memory engine
 - Shows persisted signal history with one-click reload into the Trading Desk
-- Supports quote-notional and base-quantity ticket sizing, paper position close controls, bracket lot context and trigger tests, and local unrealized P&L marks in the operator UI
+- Supports quote-notional and base-quantity ticket sizing, paper position close controls, bracket lot context, bracket previews, stop tightening, bracket cancellation, trigger tests, and local unrealized P&L marks in the operator UI
 - Captures inline halt and approval rejection reasons in operator workflows
 - Shows timestamped audit events, exports filtered audit CSVs, and copies JSON payloads from operator panels
 - Exposes CCXT venue discovery and capability inspection without enabling live execution
@@ -204,6 +204,8 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-
 Stop amendments are paper-only bracket maintenance events. A long bracket stop can only move upward, and a short bracket stop can only move downward. Attempts to loosen the stop return `409` and leave the bracket unchanged. Successful amendments record a synthetic `bracket_stop_amend` paper order plus a `bracket.stop_amended` audit event when SQLite persistence is configured, and those amendments replay after restart.
 
 Bracket cancellation records a synthetic `bracket_cancel` paper order plus a `bracket.canceled` audit event when SQLite persistence is configured. It removes the active stop-loss, take-profit, and trailing-stop legs for that paper lot, but it does not close the open paper exposure. The operator must submit a separate reduce-only or manual close order when the position itself should be closed.
+
+The Portfolio Sentinel `Bracket Ledger` exposes those same paper-only controls in the UI. `Preview` calls `POST /brackets/{signal_id}/preview` at the selected exit trigger, `Tighten Stop` prompts for a new protective stop and calls `POST /brackets/{signal_id}/stop`, `Cancel Bracket` removes synthetic exits without closing the paper position, and `Trigger` still applies the mark through `POST /market/price`. These controls are operator maintenance tools for simulated brackets; they do not place live exchange orders.
 
 Use `take_profit_targets` for staged exits. Each target accepts either `pct` or `trigger_price` plus `close_pct`, and the total `close_pct` cannot exceed `100`. For example, `[{ "pct": "3", "close_pct": "50" }, { "trigger_price": "53000", "close_pct": "50" }]` sells half of the original paper lot at 3% profit and the remaining half at the exact trigger price. Long absolute targets must sit above entry and short absolute targets must sit below entry; risk checks reject the whole signal if any staged target is inverted. If the first target fills and price later falls to the stop, the remaining paper quantity exits through the stop-loss or trailing-stop leg. If `take_profit_targets` is omitted, `take_profit_pct` or `take_profit_price` still creates one full-size take-profit target.
 

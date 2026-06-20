@@ -715,7 +715,10 @@ function renderPortfolio() {
             <td>
               <div class="row-actions">
                 <button type="button" data-action="load-position-price" data-symbol="${escapeHtml(compact)}" data-price="${escapeHtml(exit.trigger_price)}">Load</button>
+                <button type="button" data-action="preview-bracket" data-signal-id="${escapeHtml(exit.signal_id)}" data-price="${escapeHtml(exit.trigger_price)}">Preview</button>
                 <button type="button" data-action="trigger-exit-price" data-symbol="${escapeHtml(compact)}" data-price="${escapeHtml(exit.trigger_price)}">Trigger</button>
+                <button type="button" data-action="amend-bracket-stop" data-signal-id="${escapeHtml(exit.signal_id)}" data-price="${escapeHtml(exit.trigger_price)}">Tighten Stop</button>
+                <button type="button" data-action="cancel-bracket" data-signal-id="${escapeHtml(exit.signal_id)}">Cancel Bracket</button>
               </div>
             </td>
           </tr>
@@ -1081,6 +1084,48 @@ async function updateMarkPrice(symbol, price) {
   appState.lastPayload = result;
   appState.markPrices[result.symbol] = Number(result.price);
   setStatus(`Updated ${result.symbol} to ${result.price}; triggered ${result.triggered.length} exits.`, result.triggered.length ? "warn" : "ok");
+  await loadState(false);
+}
+
+async function previewBracket(signalId, price) {
+  const result = await api(`/brackets/${encodeURIComponent(signalId)}/preview`, {
+    method: "POST",
+    body: { price },
+  });
+  appState.lastPayload = result;
+  setStatus(
+    `Previewed ${signalId} at ${result.price}; would trigger ${result.would_trigger.length} exits.`,
+    result.would_trigger.length ? "warn" : "ok",
+  );
+  renderSignals();
+}
+
+async function amendBracketStop(signalId, currentPrice) {
+  const triggerPrice = window.prompt("New protective stop trigger price", currentPrice || "");
+  if (!triggerPrice) {
+    setStatus("Stop amendment canceled.", "warn");
+    return;
+  }
+  const result = await api(`/brackets/${encodeURIComponent(signalId)}/stop`, {
+    method: "POST",
+    body: { trigger_price: triggerPrice, reason: "operator UI stop tighten" },
+  });
+  appState.lastPayload = result;
+  setStatus(`Tightened ${signalId} stop to ${triggerPrice}.`, "ok");
+  await loadState(false);
+}
+
+async function cancelBracket(signalId) {
+  if (!window.confirm(`Cancel synthetic exits for ${signalId}? The paper position stays open.`)) {
+    setStatus("Bracket cancellation aborted.", "warn");
+    return;
+  }
+  const result = await api(`/brackets/${encodeURIComponent(signalId)}/cancel`, {
+    method: "POST",
+    body: { reason: "operator UI bracket cancel" },
+  });
+  appState.lastPayload = result;
+  setStatus(`Canceled synthetic bracket exits for ${signalId}.`, "warn");
   await loadState(false);
 }
 
@@ -1704,6 +1749,18 @@ function bindEvents() {
     }
     if (action === "trigger-exit-price") {
       updateMarkPrice(target.dataset.symbol, target.dataset.price)
+        .catch((error) => setStatus(error.message, "error"));
+    }
+    if (action === "preview-bracket") {
+      previewBracket(target.dataset.signalId, target.dataset.price)
+        .catch((error) => setStatus(error.message, "error"));
+    }
+    if (action === "amend-bracket-stop") {
+      amendBracketStop(target.dataset.signalId, target.dataset.price)
+        .catch((error) => setStatus(error.message, "error"));
+    }
+    if (action === "cancel-bracket") {
+      cancelBracket(target.dataset.signalId)
         .catch((error) => setStatus(error.message, "error"));
     }
     if (action === "close-position") {
