@@ -19,6 +19,10 @@ class ExchangeCapabilities:
     create_order: bool
     cancel_order: bool
     fetch_balance: bool
+    attached_stop_loss_take_profit: bool = False
+    oco_order: bool = False
+    trailing_order: bool = False
+    reduce_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +35,10 @@ class ExchangeCapabilities:
             "create_order": self.create_order,
             "cancel_order": self.cancel_order,
             "fetch_balance": self.fetch_balance,
+            "attached_stop_loss_take_profit": self.attached_stop_loss_take_profit,
+            "oco_order": self.oco_order,
+            "trailing_order": self.trailing_order,
+            "reduce_only": self.reduce_only,
         }
 
 
@@ -64,6 +72,15 @@ class CcxtExchangeAdapter:
             create_order=bool(has.get("createOrder")),
             cancel_order=bool(has.get("cancelOrder")),
             fetch_balance=bool(has.get("fetchBalance")),
+            attached_stop_loss_take_profit=_truthy_has(
+                has,
+                "createOrderWithTakeProfitAndStopLoss",
+                "createOrderWithStopLossAndTakeProfit",
+                "attachedStopLossTakeProfit",
+            ),
+            oco_order=_truthy_has(has, "createOcoOrder", "createOCOOrder", "ocoOrder"),
+            trailing_order=_truthy_has(has, "createTrailingOrder", "trailingOrder", "trailingStop"),
+            reduce_only=_truthy_has(has, "reduceOnly", "createReduceOnlyOrder"),
         )
 
 
@@ -78,3 +95,7 @@ def _load_ccxt() -> Any:
     except ImportError as exc:
         raise CcxtNotInstalledError("Install auto-crypto[exchange] to enable CCXT adapters") from exc
     return ccxt
+
+
+def _truthy_has(has: dict[str, Any], *names: str) -> bool:
+    return any(bool(has.get(name)) for name in names)

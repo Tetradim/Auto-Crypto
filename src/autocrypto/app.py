@@ -30,6 +30,7 @@ from .exchanges.ccxt_adapter import (
     ExchangeCapabilities,
     list_ccxt_exchange_ids,
 )
+from .exchanges.order_planner import plan_bracket_execution
 from .exchanges.platform_registry import get_platform, platform_rows
 from .execution import ExecutionCostConfig, PaperExchange, build_exit_orders
 from .intake import SignalIntakeService
@@ -812,6 +813,23 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _signal_preview(signal, engine, require_approval=require_approval)
 
+    @app.post("/signals/exchange-plan")
+    async def signal_exchange_plan(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            signal = normalize_signal(payload, source="operator-plan")
+            capabilities = _capabilities_for_signal_exchange(signal.exchange)
+        except SignalValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except CcxtNotInstalledError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except BitunixConfigurationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        plan = plan_bracket_execution(signal, capabilities)
+        return {"signal": _signal_to_dict(signal), "capabilities": capabilities.to_dict(), "plan": plan.to_dict()}
+
     @app.post("/backtest/signal")
     async def backtest_signal(request: Request) -> dict[str, Any]:
         payload = await request.json()
@@ -941,7 +959,23 @@ def _paper_capabilities() -> ExchangeCapabilities:
         create_order=True,
         cancel_order=False,
         fetch_balance=False,
+        attached_stop_loss_take_profit=True,
+        oco_order=True,
+        trailing_order=True,
+        reduce_only=True,
     )
+
+
+def _capabilities_for_signal_exchange(exchange_id: str) -> ExchangeCapabilities:
+    normalized = exchange_id.strip().lower()
+    if normalized == "paper":
+        return _paper_capabilities()
+    if normalized == "bitunix":
+        return BitunixRestClient(credentials=load_bitunix_credentials_from_env()).capabilities()
+    platform = get_platform(normalized)
+    if platform and platform.ccxt_id:
+        normalized = platform.ccxt_id
+    return CcxtExchangeAdapter(normalized).capabilities()
 
 
 def _exchange_row(exchange_id: str, driver: str) -> dict[str, Any]:

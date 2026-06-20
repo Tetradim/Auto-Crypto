@@ -73,6 +73,10 @@ class BitunixRestClient:
             create_order=True,
             cancel_order=True,
             fetch_balance=True,
+            attached_stop_loss_take_profit=False,
+            oco_order=False,
+            trailing_order=False,
+            reduce_only=True,
         )
 
     def get_futures_trading_pairs(self, symbols: str | None = None) -> dict[str, Any]:

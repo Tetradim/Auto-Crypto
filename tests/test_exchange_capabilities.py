@@ -24,6 +24,10 @@ class FakeExchange:
         "createOrder": True,
         "cancelOrder": False,
         "fetchBalance": True,
+        "createOrderWithTakeProfitAndStopLoss": True,
+        "createOcoOrder": True,
+        "createTrailingOrder": True,
+        "reduceOnly": True,
     }
 
     def __init__(self, credentials):
@@ -69,6 +73,10 @@ def test_ccxt_adapter_lists_exchange_ids_and_reports_capabilities(monkeypatch):
         "create_order": True,
         "cancel_order": False,
         "fetch_balance": True,
+        "attached_stop_loss_take_profit": True,
+        "oco_order": True,
+        "trailing_order": True,
+        "reduce_only": True,
     }
 
 
@@ -132,6 +140,10 @@ def test_exchange_capabilities_endpoint_reports_specific_exchange(monkeypatch):
         "create_order": True,
         "cancel_order": False,
         "fetch_balance": True,
+        "attached_stop_loss_take_profit": True,
+        "oco_order": True,
+        "trailing_order": True,
+        "reduce_only": True,
     }
 
 
@@ -222,6 +234,10 @@ def test_bitunix_capabilities_endpoint_reports_native_adapter():
         "create_order": True,
         "cancel_order": True,
         "fetch_balance": True,
+        "attached_stop_loss_take_profit": False,
+        "oco_order": False,
+        "trailing_order": False,
+        "reduce_only": True,
     }
 
 

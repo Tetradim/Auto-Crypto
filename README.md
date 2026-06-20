@@ -44,6 +44,7 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Captures inline halt and approval rejection reasons in operator workflows
 - Shows timestamped audit events, exports filtered audit CSVs, and copies JSON payloads from operator panels
 - Exposes CCXT venue discovery and capability inspection without enabling live execution
+- Exposes a non-executing bracket/trailing exchange-plan preview that classifies a signal as paper synthetic, attached TP/SL, entry-then-OCO, entry-then-trailing, or paper-required based on venue capability flags
 - Tracks a curated Bitcoin platform registry for Coinbase, Kraken, Gemini, Bitstamp, Binance.US, Alpaca, Robinhood, Crypto.com, OKX, Bybit, KuCoin, Bitget, Gate.io, MEXC, Phemex, BitMEX, Deribit, and Bitunix
 - Provides a minimal Discord slash-command client for `/health` and `/signal_test`
 
@@ -342,6 +343,22 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/webhooks/text-alert -C
 }'
 ```
 
+Preview how a normalized bracket would map to exchange capabilities without placing any order:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/signals/exchange-plan -ContentType "application/json" -Body '{
+  "symbol": "BTCUSDT",
+  "side": "buy",
+  "quote_amount": "100",
+  "price": "50000",
+  "stop_loss_pct": "2",
+  "take_profit_pct": "4",
+  "trailing_stop_pct": "3"
+}'
+```
+
+The exchange-plan route is intentionally non-executing. For `exchange: "paper"` it returns `paper_synthetic_bracket`; for future CCXT/native venues it returns a conservative strategy label such as `attached_stop_loss_take_profit`, `entry_then_oco_after_fill`, `entry_then_trailing_stop`, or `paper_required_for_mixed_bracket_trailing`. `live_order_safe` remains `false` because Auto-Crypto still does not submit live orders.
+
 ## Signal Schema
 
 Required fields:
@@ -446,6 +463,7 @@ Current bot work is guided by paper-first risk controls and exchange order behav
 - CCXT's trailing-order FAQ calls out `reduceOnly` as an exchange-dependent way to close rather than open exposure; Auto-Crypto supports paper `reduce_only` and `close_short` intents while keeping live execution disabled: <https://docs.ccxt.com/docs/faq>
 - CCXT's order FAQ also recommends checking exchange feature flags for native take-profit and stop-loss support; this is why staged TP/SL simulation is recorded as paper behavior instead of assuming a portable live bracket implementation: <https://github.com/ccxt/ccxt/wiki/FAQ/9e4963a7b3438ba4fee47be1ec6922f4baf6684e>
 - CCXT describes trailing orders as exchange-dependent, sometimes usable with `reduceOnly`, and able to trail by percentage or quote amount, so Auto-Crypto accepts `trailing_stop_pct`, fixed `trailing_stop_amount`, and exact paper trail starts while keeping live execution gated until adapter support is explicit: <https://docs.ccxt.com/docs/faq>
+- CCXT's current manual describes attached stop-loss/take-profit orders, OCO-like linked exits, and exchange-dependent trailing parameters, so Auto-Crypto now exposes `/signals/exchange-plan` as a capability-based planning preview instead of assuming one portable live bracket implementation: <https://github.com/ccxt/ccxt/wiki/manual>
 - Coinbase documents bracket and TP/SL behavior as paired exits where the triggered side executes and the other side cancels; exact `trailing_stop_price` remains paper-only because this venue behavior differs from portable trailing-order semantics: <https://help.coinbase.com/en/coinbase/trading-and-funding/advanced-trade/order-types>
 - Bot setting guidance consistently emphasizes stop loss, take profit, demo/paper testing, backtesting, and position sizing before live automation: <https://bitsgap.com/blog/how-to-choose-crypto-trading-bot-settings-in-2026-range-investment-stop-loss-and-take-profit>
 - Current bot-setting guidance treats take-profit and stop-loss selection as part of the strategy's risk/reward profile, so Auto-Crypto now reports and can gate both first-target and weighted staged-target reward/risk before paper execution: <https://bitsgap.com/blog/how-to-choose-crypto-trading-bot-settings-in-2026-range-investment-stop-loss-and-take-profit>
