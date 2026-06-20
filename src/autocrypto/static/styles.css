@@ -482,6 +482,107 @@ pre {
   grid-column: 1 / -1;
 }
 
+.operator-snapshot {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.snapshot-card {
+  min-height: 94px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  padding: 14px;
+  text-align: left;
+  background:
+    linear-gradient(145deg, rgba(39, 217, 239, 0.11), transparent 54%),
+    #0b1018;
+}
+
+.snapshot-card:hover,
+.snapshot-card:focus-visible {
+  transform: translateY(-1px);
+}
+
+.snapshot-card span,
+.snapshot-card em,
+.preflight-grid span {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.snapshot-card strong {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 1.55rem;
+}
+
+.snapshot-card.ok {
+  border-color: rgba(40, 216, 161, 0.45);
+}
+
+.snapshot-card.warn {
+  border-color: rgba(255, 190, 61, 0.58);
+}
+
+.snapshot-card.quiet {
+  background: #0b1018;
+}
+
+.preflight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.preflight-grid div {
+  min-height: 72px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-3);
+  padding: 12px;
+}
+
+.preflight-grid div.ok {
+  border-color: rgba(40, 216, 161, 0.34);
+}
+
+.preflight-grid div.warn {
+  border-color: rgba(255, 190, 61, 0.55);
+}
+
+.preflight-grid strong,
+.status-chip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-chip {
+  display: inline-block;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #0c111a;
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 0.78rem;
+}
+
+.status-chip.green {
+  border-color: rgba(40, 216, 161, 0.42);
+  color: var(--green);
+}
+
+.status-chip.amber {
+  border-color: rgba(255, 190, 61, 0.5);
+  color: var(--amber);
+}
+
 .signal-list,
 .metric-stack,
 .timeline,
@@ -1324,6 +1425,7 @@ meter::-webkit-meter-optimum-value {
   }
 
   .market-strip,
+  .operator-snapshot,
   .dashboard-grid,
   .signals-grid,
   .desk-grid,
@@ -1360,7 +1462,8 @@ meter::-webkit-meter-optimum-value {
   .ticket-actions,
   .ticket-copy-actions,
   .size-presets,
-  .bitunix-controls {
+  .bitunix-controls,
+  .preflight-grid {
     grid-template-columns: 1fr;
   }
 }

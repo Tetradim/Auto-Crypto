@@ -44,6 +44,10 @@ def test_operator_ui_is_served_from_backend():
     assert "data-size-preset" in ui.text
     assert "Remaining Cap" in ui.text
     assert "autoRefreshButton" in ui.text
+    assert "operatorSnapshot" in ui.text
+    assert "Operator Preflight" in ui.text
+    assert "operatorPreflight" in ui.text
+    assert "<th>Signal</th><th>Symbol</th><th>Kind</th><th>Status</th><th>Qty</th><th>Trigger</th><th>Distance</th><th>Action</th>" in ui.text
     assert "copyTicketAlertButton" in ui.text
     assert "copyTicketJsonButton" in ui.text
     assert "copyCapabilityButton" in ui.text
@@ -153,6 +157,13 @@ def test_operator_ui_is_served_from_backend():
     assert "renderExecutionMode" in script.text
     assert "Queue for Approval" in script.text
     assert "Queue Approval" in script.text
+    assert "renderOperatorSnapshot" in script.text
+    assert "openAttentionCount" in script.text
+    assert "renderOperatorPreflight" in script.text
+    assert "triggerDistanceText" in script.text
+    assert "pending activation" in script.text
+    assert "Live trading" in script.text
+    assert "locked by config" in script.text
 
 
 def test_ui_state_returns_dashboard_contract(tmp_path):

@@ -198,6 +198,8 @@ function renderDashboard() {
   const orders = data.orders || [];
   const audit = data.audit || [];
 
+  renderOperatorSnapshot();
+
   $("#pendingPreview").innerHTML =
     approvals.length > 0
       ? approvals.slice(0, 3).map(signalRow).join("")
@@ -513,8 +515,103 @@ function renderTradingDesk() {
   const mark = currentMarkPrice(appState.selectedPair);
   $("#markPrice").value = String(mark.toFixed(mark > 1000 ? 0 : 2));
   renderOrderBook(mark);
+  renderOperatorPreflight();
   renderDeskTable();
   renderTicketPreview();
+}
+
+function openAttentionCount() {
+  const data = appState.data || {};
+  return [
+    Boolean(data.control?.halted),
+    (data.approvals || []).length > 0,
+    (data.active_exits || []).some((exit) => exit.status === "pending_activation"),
+    Number(data.account?.daily_pnl || 0) < 0,
+  ].filter(Boolean).length;
+}
+
+function triggerDistance(exit) {
+  const mark = currentMarkPrice(compactSymbol(exit.symbol));
+  const trigger = Number(exit.trigger_price);
+  if (!Number.isFinite(mark) || !Number.isFinite(trigger) || mark === 0) return null;
+  return ((trigger - mark) / mark) * 100;
+}
+
+function triggerDistanceText(exit) {
+  const distance = triggerDistance(exit);
+  if (distance === null) return "-";
+  const direction = Number(distance) >= 0 ? "above mark" : "below mark";
+  return `${Math.abs(distance).toFixed(2)}% ${direction}`;
+}
+
+function renderOperatorSnapshot() {
+  const data = appState.data || {};
+  const approvals = data.approvals || [];
+  const positions = data.positions || [];
+  const exits = data.active_exits || [];
+  const openNotional = Number(data.account?.open_notional || 0);
+  const maxOpen = Number(data.risk?.max_open_notional || 0) || Number(data.account?.equity || 10000);
+  const usage = maxOpen > 0 ? Math.min(100, (openNotional / maxOpen) * 100) : 0;
+  const halted = Boolean(data.control?.halted);
+  const cards = [
+    {
+      label: "Attention",
+      value: openAttentionCount(),
+      detail: halted ? "global halt active" : approvals.length ? "approval queue waiting" : "no urgent flags",
+      tone: halted || approvals.length ? "warn" : "ok",
+      target: approvals.length ? "signals" : "audit",
+    },
+    {
+      label: "Exposure",
+      value: `${Math.round(usage)}%`,
+      detail: `${money(openNotional)} / ${money(maxOpen)}`,
+      tone: usage > 80 ? "warn" : "ok",
+      target: "portfolio",
+    },
+    {
+      label: "Positions",
+      value: positions.length,
+      detail: positions.length ? `${positions.map((position) => position.symbol).slice(0, 3).join(", ")}` : "flat paper book",
+      tone: positions.length ? "" : "quiet",
+      target: "trading",
+    },
+    {
+      label: "Active exits",
+      value: exits.length,
+      detail: exits.length ? `${exits.filter((exit) => exit.status === "pending_activation").length} pending activation` : "no synthetic exits",
+      tone: exits.length ? "warn" : "quiet",
+      target: "portfolio",
+    },
+  ];
+  $("#operatorSnapshot").innerHTML = cards.map((card) => `
+    <button type="button" class="snapshot-card ${card.tone}" data-action="nav" data-target="${card.target}">
+      <span>${escapeHtml(card.label)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      <em>${escapeHtml(card.detail)}</em>
+    </button>
+  `).join("");
+}
+
+function renderOperatorPreflight() {
+  const data = appState.data || {};
+  const approvals = data.approvals || [];
+  const exits = data.active_exits || [];
+  const checks = [
+    ["Live trading", "locked by config", true],
+    ["Execution intent", data.execution?.submit_intent === "queue_for_approval" ? "queues approval" : "paper order only", true],
+    ["Global control", data.control?.halted ? data.control?.reason || "halted" : "ready", !data.control?.halted],
+    ["Approval queue", approvals.length ? `${approvals.length} waiting` : "clear", approvals.length === 0],
+    ["Exit coverage", exits.length ? `${exits.length} synthetic exits visible` : "none active", true],
+    ["Audit visibility", (data.audit || []).length ? `${data.audit.length} events loaded` : "no events yet", true],
+  ];
+  $("#preflightState").textContent = checks.every(([, , ok]) => ok) ? "ready" : "review";
+  $("#preflightState").className = checks.every(([, , ok]) => ok) ? "green" : "amber";
+  $("#operatorPreflight").innerHTML = checks.map(([label, value, ok]) => `
+    <div class="${ok ? "ok" : "warn"}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `).join("");
 }
 
 function renderOrderBook(mid) {
@@ -704,6 +801,9 @@ function renderPortfolio() {
     exits.length > 0
       ? exits.map((exit) => {
         const compact = compactSymbol(exit.symbol);
+        const signalLabel = String(exit.signal_id || "").slice(0, 12) || "manual";
+        const status = String(exit.status || "open").replaceAll("_", " ");
+        const statusClass = exit.status === "pending_activation" ? "amber" : exit.status === "filled" ? "green" : "";
         const trailingAction = exit.kind === "trailing_stop"
           ? `<button type="button" data-action="amend-bracket-trailing-stop" data-signal-id="${escapeHtml(exit.signal_id)}" data-price="${escapeHtml(exit.trigger_price)}">Tighten Trail</button>`
           : "";
@@ -715,12 +815,13 @@ function renderPortfolio() {
           : "";
         return `
           <tr>
+            <td title="${escapeHtml(exit.signal_id || "")}">${escapeHtml(signalLabel)}</td>
             <td>${escapeHtml(exit.symbol)}</td>
-            <td>${escapeHtml(exit.direction || "long")}</td>
             <td>${escapeHtml(exit.kind)}</td>
+            <td><span class="status-chip ${statusClass}">${escapeHtml(status)}</span></td>
             <td>${escapeHtml(exit.remaining_quantity || "-")}</td>
-            <td>${exit.entry_price ? money(exit.entry_price) : "-"}</td>
             <td>${money(exit.trigger_price)}</td>
+            <td>${escapeHtml(triggerDistanceText(exit))}</td>
             <td>
               <div class="row-actions">
                 <button type="button" data-action="load-position-price" data-symbol="${escapeHtml(compact)}" data-price="${escapeHtml(exit.trigger_price)}">Load</button>
@@ -737,7 +838,7 @@ function renderPortfolio() {
           </tr>
         `;
       }).join("")
-      : `<tr><td colspan="7">No active exits. Bracketed buy and short signals create rows.</td></tr>`;
+      : `<tr><td colspan="8">No active exits. Bracketed buy and short signals create rows.</td></tr>`;
 }
 
 function renderExchanges() {

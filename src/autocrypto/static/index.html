@@ -72,6 +72,8 @@
           </div>
         </div>
 
+        <section class="operator-snapshot" id="operatorSnapshot" aria-label="Operator operations snapshot"></section>
+
         <div class="dashboard-grid">
           <section class="panel span-2">
             <div class="panel-title">
@@ -321,6 +323,14 @@
 
           <section class="panel span-all">
             <div class="panel-title">
+              <h2>Operator Preflight</h2>
+              <span id="preflightState">loading</span>
+            </div>
+            <div class="preflight-grid" id="operatorPreflight"></div>
+          </section>
+
+          <section class="panel span-all">
+            <div class="panel-title">
               <h2>Positions and Orders</h2>
               <div class="title-actions">
                 <input id="deskSearch" class="inline-filter" placeholder="Filter positions or orders" />
@@ -438,7 +448,7 @@
             </div>
             <div class="table-wrap">
               <table class="dense-table">
-                <thead><tr><th>Symbol</th><th>Side</th><th>Kind</th><th>Qty</th><th>Entry</th><th>Trigger</th><th>Action</th></tr></thead>
+                <thead><tr><th>Signal</th><th>Symbol</th><th>Kind</th><th>Status</th><th>Qty</th><th>Trigger</th><th>Distance</th><th>Action</th></tr></thead>
                 <tbody id="bracketRows"></tbody>
               </table>
             </div>
