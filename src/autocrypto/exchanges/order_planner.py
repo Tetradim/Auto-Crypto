@@ -15,6 +15,8 @@ class PlannedOrderLeg:
     side: str
     order_type: str
     intent: str
+    position_effect: str
+    close_action: str | None = None
     trigger_price: Decimal | None = None
     limit_price: Decimal | None = None
     close_pct: Decimal = Decimal("100")
@@ -30,6 +32,8 @@ class PlannedOrderLeg:
             "side": self.side,
             "order_type": self.order_type,
             "intent": self.intent,
+            "position_effect": self.position_effect,
+            "close_action": self.close_action,
             "trigger_price": str(self.trigger_price) if self.trigger_price is not None else None,
             "limit_price": str(self.limit_price) if self.limit_price is not None else None,
             "close_pct": str(self.close_pct),
@@ -76,6 +80,7 @@ def plan_bracket_execution(signal: CryptoSignal, capabilities: ExchangeCapabilit
         side=signal.side,
         order_type="limit" if signal.price is not None else "market",
         intent="open_or_reduce_position",
+        position_effect="reduce_only" if signal.reduce_only else _entry_position_effect(signal.side),
         limit_price=signal.price,
         reduce_only=signal.reduce_only,
         params=_entry_params(signal),
@@ -85,6 +90,7 @@ def plan_bracket_execution(signal: CryptoSignal, capabilities: ExchangeCapabilit
         for exit_order in exit_orders
     )
     warnings = _plan_warnings(exit_orders, capabilities)
+    warnings.extend(_signal_exit_field_warnings(signal, exit_orders))
 
     if not exit_orders:
         strategy = "single_order"
@@ -124,7 +130,7 @@ def plan_bracket_execution(signal: CryptoSignal, capabilities: ExchangeCapabilit
         live_order_safe=live_order_safe,
         entry=entry,
         exits=exits,
-        summary=_plan_summary(exit_orders),
+        summary=_plan_summary(signal, exit_orders),
         execution_sequence=tuple(_execution_sequence(strategy, signal, exit_orders, capabilities)),
         warnings=tuple(warnings),
         notes=tuple(notes),
@@ -171,6 +177,8 @@ def _planned_exit(
         side=side,
         order_type=order_type,
         intent=intent,
+        position_effect="close",
+        close_action=_close_action(signal.side),
         trigger_price=exit_order.trigger_price,
         close_pct=exit_order.close_pct,
         reduce_only=True,
@@ -215,7 +223,15 @@ def _plan_warnings(exit_orders: list[ExitOrder], capabilities: ExchangeCapabilit
     return warnings
 
 
-def _plan_summary(exit_orders: list[ExitOrder]) -> dict[str, Any]:
+def _signal_exit_field_warnings(signal: CryptoSignal, exit_orders: list[ExitOrder]) -> list[str]:
+    if not signal.reduce_only or exit_orders:
+        return []
+    if _signal_has_exit_fields(signal):
+        return ["reduce_only_signal_ignores_bracket_exit_fields"]
+    return []
+
+
+def _plan_summary(signal: CryptoSignal, exit_orders: list[ExitOrder]) -> dict[str, Any]:
     take_profit_close_pct = sum(
         (exit_order.close_pct for exit_order in exit_orders if exit_order.kind == "take_profit"),
         Decimal("0"),
@@ -253,6 +269,10 @@ def _plan_summary(exit_orders: list[ExitOrder]) -> dict[str, Any]:
             for exit_order in exit_orders
         ),
         "requires_custom_native_mapping": _has_non_portable_exit_shape(exit_orders),
+        "entry_position_effect": "reduce_only" if signal.reduce_only else _entry_position_effect(signal.side),
+        "exit_side": _exit_side(signal.side),
+        "exit_close_action": _close_action(signal.side),
+        "ignored_bracket_fields": signal.reduce_only and _signal_has_exit_fields(signal) and not exit_orders,
     }
 
 
@@ -333,6 +353,7 @@ def _execution_sequence(
             "step": "submit_entry",
             "side": signal.side,
             "order_type": "limit" if signal.price is not None else "market",
+            "position_effect": "reduce_only" if signal.reduce_only else _entry_position_effect(signal.side),
             "live_submission_enabled": False,
         }
     ]
@@ -345,21 +366,65 @@ def _execution_sequence(
                 "step": "track_synthetic_exits",
                 "mode": "paper",
                 "exit_count": len(exit_orders),
+                "exit_side": _exit_side(signal.side),
+                "close_action": _close_action(signal.side),
                 "live_submission_enabled": False,
             }
         )
         return sequence
     if strategy == "attached_stop_loss_take_profit":
-        sequence.append({"step": "attach_stop_loss_take_profit", "venue_feature": "attached_tp_sl"})
+        sequence.append(
+            {
+                "step": "attach_stop_loss_take_profit",
+                "venue_feature": "attached_tp_sl",
+                "exit_side": _exit_side(signal.side),
+                "close_action": _close_action(signal.side),
+            }
+        )
     elif strategy == "entry_then_oco_after_fill":
-        sequence.append({"step": "place_oco_after_fill", "venue_feature": "oco"})
+        sequence.append(
+            {
+                "step": "place_oco_after_fill",
+                "venue_feature": "oco",
+                "exit_side": _exit_side(signal.side),
+                "close_action": _close_action(signal.side),
+            }
+        )
     elif strategy == "attached_bracket_with_trailing":
-        sequence.append({"step": "attach_stop_loss_take_profit", "venue_feature": "attached_tp_sl"})
-        sequence.append({"step": "place_or_track_trailing_stop", "venue_feature": "trailing_order"})
+        sequence.append(
+            {
+                "step": "attach_stop_loss_take_profit",
+                "venue_feature": "attached_tp_sl",
+                "exit_side": _exit_side(signal.side),
+                "close_action": _close_action(signal.side),
+            }
+        )
+        sequence.append(
+            {
+                "step": "place_or_track_trailing_stop",
+                "venue_feature": "trailing_order",
+                "exit_side": _exit_side(signal.side),
+                "close_action": _close_action(signal.side),
+            }
+        )
     elif strategy == "entry_then_trailing_stop":
-        sequence.append({"step": "place_or_track_trailing_stop", "venue_feature": "trailing_order"})
+        sequence.append(
+            {
+                "step": "place_or_track_trailing_stop",
+                "venue_feature": "trailing_order",
+                "exit_side": _exit_side(signal.side),
+                "close_action": _close_action(signal.side),
+            }
+        )
     else:
-        sequence.append({"step": "place_conditional_exit_after_fill", "venue_feature": "conditional_order"})
+        sequence.append(
+            {
+                "step": "place_conditional_exit_after_fill",
+                "venue_feature": "conditional_order",
+                "exit_side": _exit_side(signal.side),
+                "close_action": _close_action(signal.side),
+            }
+        )
     for step in sequence:
         step.setdefault("live_submission_enabled", False)
     return sequence
@@ -367,3 +432,26 @@ def _execution_sequence(
 
 def _exit_side(entry_side: str) -> str:
     return "sell" if entry_side == "buy" else "buy"
+
+
+def _entry_position_effect(entry_side: str) -> str:
+    return "open_long" if entry_side == "buy" else "open_short"
+
+
+def _close_action(entry_side: str) -> str:
+    return "sell_to_close_long" if entry_side == "buy" else "buy_to_cover_short"
+
+
+def _signal_has_exit_fields(signal: CryptoSignal) -> bool:
+    return (
+        signal.stop_loss_pct is not None
+        or signal.stop_loss_price is not None
+        or bool(signal.take_profit_targets)
+        or signal.take_profit_price is not None
+        or signal.trailing_stop_pct is not None
+        or signal.trailing_stop_amount is not None
+        or signal.trailing_stop_price is not None
+        or signal.trailing_activation_price is not None
+        or signal.breakeven_trigger_pct is not None
+        or signal.max_hold_marks is not None
+    )

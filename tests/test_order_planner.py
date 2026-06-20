@@ -44,17 +44,21 @@ def test_order_planner_keeps_paper_bracket_synthetic_and_not_live_safe():
     assert plan.live_order_safe is False
     assert [exit_leg.role for exit_leg in plan.exits] == ["stop_loss", "take_profit", "trailing_stop"]
     assert [exit_leg.side for exit_leg in plan.exits] == ["sell", "sell", "sell"]
+    assert [exit_leg.close_action for exit_leg in plan.exits] == ["sell_to_close_long"] * 3
     assert [exit_leg.intent for exit_leg in plan.exits] == ["protective_exit", "profit_exit", "protective_exit"]
     assert {exit_leg.exchange_order_family for exit_leg in plan.exits} == {"synthetic_paper_oca"}
     assert plan.summary["protective_exit_count"] == 2
+    assert plan.summary["entry_position_effect"] == "open_long"
+    assert plan.summary["exit_side"] == "sell"
+    assert plan.summary["exit_close_action"] == "sell_to_close_long"
     assert plan.summary["take_profit_close_pct"] == "100"
     assert plan.summary["trailing_stop_close_pct"] == "100"
-    assert plan.execution_sequence[-1] == {
-        "step": "track_synthetic_exits",
-        "mode": "paper",
-        "exit_count": 3,
-        "live_submission_enabled": False,
-    }
+    assert plan.execution_sequence[-1]["step"] == "track_synthetic_exits"
+    assert plan.execution_sequence[-1]["mode"] == "paper"
+    assert plan.execution_sequence[-1]["exit_count"] == 3
+    assert plan.execution_sequence[-1]["exit_side"] == "sell"
+    assert plan.execution_sequence[-1]["close_action"] == "sell_to_close_long"
+    assert plan.execution_sequence[-1]["live_submission_enabled"] is False
 
 
 def test_order_planner_uses_attached_strategy_when_venue_advertises_brackets_and_trailing():
@@ -91,7 +95,10 @@ def test_order_planner_uses_attached_strategy_when_venue_advertises_brackets_and
     plan = plan_bracket_execution(signal, capabilities)
 
     assert plan.strategy == "attached_bracket_with_trailing"
+    assert plan.entry.position_effect == "open_short"
     assert plan.exits[0].side == "buy"
+    assert plan.exits[0].close_action == "buy_to_cover_short"
+    assert plan.exits[0].position_effect == "close"
     assert plan.exits[0].reduce_only is True
     assert plan.exits[0].params["reduceOnly"] is True
     assert plan.exits[0].exchange_order_family == "attached_take_profit_stop_loss"
@@ -103,6 +110,8 @@ def test_order_planner_uses_attached_strategy_when_venue_advertises_brackets_and
         "attach_stop_loss_take_profit",
         "place_or_track_trailing_stop",
     ]
+    assert plan.execution_sequence[2]["exit_side"] == "buy"
+    assert plan.execution_sequence[2]["close_action"] == "buy_to_cover_short"
     assert all(step["live_submission_enabled"] is False for step in plan.execution_sequence)
 
 
@@ -304,3 +313,43 @@ def test_order_planner_requires_paper_for_staged_or_partial_native_bracket_shape
     assert {exit_leg.exchange_order_family for exit_leg in plan.exits} == {"paper_or_custom_native_mapping"}
     assert plan.execution_sequence[-1]["step"] == "track_synthetic_exits"
     assert plan.execution_sequence[-1]["live_submission_enabled"] is False
+
+
+def test_order_planner_flags_reduce_only_signals_that_include_bracket_fields():
+    signal = normalize_signal(
+        {
+            "signal_id": "close-with-bracket-fields",
+            "symbol": "BTC/USDT",
+            "side": "close_long",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "trailing_stop_pct": "4",
+        },
+        source="test",
+    )
+    capabilities = ExchangeCapabilities(
+        exchange_id="paper",
+        spot=True,
+        margin=False,
+        swap=False,
+        future=False,
+        option=False,
+        create_order=True,
+        cancel_order=False,
+        fetch_balance=False,
+        attached_stop_loss_take_profit=True,
+        oco_order=True,
+        trailing_order=True,
+        reduce_only=True,
+    )
+
+    plan = plan_bracket_execution(signal, capabilities)
+
+    assert plan.strategy == "single_order"
+    assert plan.entry.position_effect == "reduce_only"
+    assert plan.entry.reduce_only is True
+    assert plan.exits == ()
+    assert "reduce_only_signal_ignores_bracket_exit_fields" in plan.warnings
+    assert plan.summary["ignored_bracket_fields"] is True
