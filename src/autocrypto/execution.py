@@ -23,6 +23,8 @@ class PaperLot:
     remaining_quantity: Decimal
     entry_price: Decimal
     exit_orders: list[ExitOrder] = field(default_factory=list)
+    trailing_stop_pct: Decimal | None = None
+    high_water_mark: Decimal | None = None
 
 
 @dataclass
@@ -69,6 +71,7 @@ class PaperOrder:
     notional: Decimal
     price: Decimal | None
     exit_orders: list[ExitOrder] = field(default_factory=list)
+    trailing_stop_pct: Decimal | None = None
     status: str = "accepted"
 
     def to_dict(self) -> dict:
@@ -86,6 +89,7 @@ class PaperOrder:
                 {"kind": exit_order.kind, "trigger_price": str(exit_order.trigger_price)}
                 for exit_order in self.exit_orders
             ],
+            "trailing_stop_pct": str(self.trailing_stop_pct) if self.trailing_stop_pct is not None else None,
         }
 
 
@@ -144,6 +148,7 @@ class PaperExchange:
             notional=decision.order_notional,
             price=signal.price,
             exit_orders=exit_orders,
+            trailing_stop_pct=signal.trailing_stop_pct,
         )
         self.orders.append(order)
         if quantity is not None:
@@ -173,6 +178,7 @@ class PaperExchange:
         for lot in list(self.lots):
             if lot.symbol != symbol or lot.remaining_quantity <= 0:
                 continue
+            self._update_trailing_stop(lot, price)
             exit_order = self._triggered_exit(lot, price)
             if exit_order is None:
                 continue
@@ -216,6 +222,8 @@ class PaperExchange:
                     remaining_quantity=quantity,
                     entry_price=signal.price,
                     exit_orders=exit_orders,
+                    trailing_stop_pct=signal.trailing_stop_pct,
+                    high_water_mark=signal.price if signal.trailing_stop_pct is not None else None,
                 )
             )
         elif signal.side == "sell":
@@ -236,6 +244,8 @@ class PaperExchange:
                     remaining_quantity=quantity,
                     entry_price=order.price,
                     exit_orders=order.exit_orders,
+                    trailing_stop_pct=order.trailing_stop_pct,
+                    high_water_mark=order.price if order.trailing_stop_pct is not None else None,
                 )
             )
         elif order.side == "sell":
@@ -244,12 +254,28 @@ class PaperExchange:
 
     def _triggered_exit(self, lot: PaperLot, price: Decimal) -> ExitOrder | None:
         for exit_order in lot.exit_orders:
-            if exit_order.kind == "stop_loss" and price <= exit_order.trigger_price:
+            if exit_order.kind in {"stop_loss", "trailing_stop"} and price <= exit_order.trigger_price:
                 return exit_order
         for exit_order in lot.exit_orders:
             if exit_order.kind == "take_profit" and price >= exit_order.trigger_price:
                 return exit_order
         return None
+
+    def _update_trailing_stop(self, lot: PaperLot, price: Decimal) -> None:
+        if lot.trailing_stop_pct is None:
+            return
+        if lot.high_water_mark is None:
+            lot.high_water_mark = lot.entry_price
+        if price <= lot.high_water_mark:
+            return
+        lot.high_water_mark = price
+        trigger = _money(price * (Decimal("1") - lot.trailing_stop_pct / Decimal("100")))
+        lot.exit_orders = [
+            ExitOrder(kind=exit_order.kind, trigger_price=trigger)
+            if exit_order.kind == "trailing_stop"
+            else exit_order
+            for exit_order in lot.exit_orders
+        ]
 
     def _close_lot(self, lot: PaperLot, price: Decimal) -> None:
         position = self.positions.get(lot.symbol)
@@ -322,6 +348,9 @@ def build_exit_orders(signal: CryptoSignal) -> list[ExitOrder]:
     if signal.take_profit_pct is not None:
         trigger = signal.price * (Decimal("1") + signal.take_profit_pct / Decimal("100"))
         exits.append(ExitOrder(kind="take_profit", trigger_price=_money(trigger)))
+    if signal.trailing_stop_pct is not None:
+        trigger = signal.price * (Decimal("1") - signal.trailing_stop_pct / Decimal("100"))
+        exits.append(ExitOrder(kind="trailing_stop", trigger_price=_money(trigger)))
     return exits
 
 
@@ -351,5 +380,8 @@ def _paper_order_from_dict(payload: dict) -> PaperOrder:
             ExitOrder(kind=str(exit_order["kind"]), trigger_price=Decimal(str(exit_order["trigger_price"])))
             for exit_order in payload.get("exit_orders", [])
         ],
+        trailing_stop_pct=Decimal(str(payload["trailing_stop_pct"]))
+        if payload.get("trailing_stop_pct") is not None
+        else None,
         status=str(payload.get("status") or "accepted"),
     )

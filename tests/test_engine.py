@@ -23,6 +23,7 @@ def test_engine_executes_approved_signal_in_paper_with_bracket_exits():
             "price": "50000",
             "stop_loss_pct": "2",
             "take_profit_pct": "4",
+            "trailing_stop_pct": "3",
             "strategy_id": "breakout",
         },
         source="test",
@@ -35,9 +36,11 @@ def test_engine_executes_approved_signal_in_paper_with_bracket_exits():
     assert result.order.mode == "paper"
     assert result.order.symbol == "BTC/USDT"
     assert result.order.notional == Decimal("200")
-    assert [exit_order.kind for exit_order in result.order.exit_orders] == ["stop_loss", "take_profit"]
+    assert [exit_order.kind for exit_order in result.order.exit_orders] == ["stop_loss", "take_profit", "trailing_stop"]
     assert result.order.exit_orders[0].trigger_price == Decimal("49000.00")
     assert result.order.exit_orders[1].trigger_price == Decimal("52000.00")
+    assert result.order.exit_orders[2].trigger_price == Decimal("48500.00")
+    assert result.order.trailing_stop_pct == Decimal("3")
 
 
 def test_engine_blocks_duplicate_signal_before_second_order():

@@ -363,7 +363,7 @@ def exercise_signal_builder_and_halt_flow(driver: UiDriver) -> str:
     for channel in ["discord", "tradingview", "operator"]:
         driver.select("#signalChannel", channel, label=f"signal channel {channel}")
     driver.click("#sampleSignalButton", "sample signal")
-    driver.fill("#signalText", "BUY BTCUSDT $251 @ 66234 SL 2% TP 4.5%", "fill BTC approval signal")
+    driver.fill("#signalText", "BUY BTCUSDT $251 @ 66234 SL 2% TP 4.5% TRAIL 2.5%", "fill BTC approval signal")
     driver.click("#parseSignalButton", "parse signal text")
     driver.page.wait_for_function("() => document.querySelector('#parsedSignal')?.textContent.includes('BTC/USDT')")
     driver.click("#previewSignalButton", "preview signal risk")
@@ -440,6 +440,7 @@ def exercise_trading_desk(driver: UiDriver) -> list[str]:
     driver.fill("#ticketPrice", "148", "ticket price 148")
     driver.fill("#ticketStop", "3", "ticket stop 3")
     driver.fill("#ticketTakeProfit", "7", "ticket take profit 7")
+    driver.fill("#ticketTrailingStop", "4", "ticket trailing stop 4")
     driver.click("#copyTicketAlertButton", "copy ticket alert")
     driver.click("#copyTicketJsonButton", "copy ticket json")
     driver.click("#buildTicketButton", "build ticket into alert")

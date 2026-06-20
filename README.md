@@ -16,7 +16,7 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Supports approval-required mode with persisted pending approvals
 - Records paper orders, paper positions, realized PnL, active bracket lots, and audit events
 - Rehydrates paper positions, bracket lots, and exposure risk state from SQLite after restart
-- Triggers paper stop-loss/take-profit exits from `POST /market/price`
+- Triggers paper stop-loss, take-profit, and trailing-stop exits from `POST /market/price`
 - Previews server-side risk decisions from the operator UI without placing orders
 - Shows persisted signal history with one-click reload into the Trading Desk
 - Supports quote-notional and base-quantity ticket sizing, paper position close controls, bracket lot context and trigger tests, and local unrealized P&L marks in the operator UI
@@ -119,7 +119,7 @@ python scripts/operator_ui_smoke.py
 2. Auto-Crypto normalizes the crypto symbol, side, size, price, exchange, and strategy metadata.
 3. Risk checks approve, reject, queue, or halt the signal.
 4. In paper mode, the bot records an accepted order and updates the paper portfolio.
-5. Price updates can trigger paper stop-loss or take-profit exits.
+5. Price updates can trigger paper stop-loss, take-profit, or trailing-stop exits.
 6. Signals, orders, positions, approvals, and audit events are stored in SQLite when `AUTO_CRYPTO_DB_PATH` is set.
 
 ## Send A Test Crypto Alert
@@ -133,6 +133,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/webhooks/tradingview -
   "price": "50000",
   "stop_loss_pct": "2",
   "take_profit_pct": "3",
+  "trailing_stop_pct": "2.5",
   "strategy_id": "breakout"
 }'
 ```
@@ -152,6 +153,8 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/market/price -ContentT
 }'
 ```
 
+For buy brackets, `stop_loss_pct` creates a fixed protective sell below entry, `take_profit_pct` creates a fixed profit-taking sell above entry, and `trailing_stop_pct` creates a sell stop that starts below entry and ratchets upward when `POST /market/price` marks a new high-water price. The trailing stop never moves lower.
+
 ## Text Crypto Alerts
 
 The text parser is intentionally strict so Discord-style alerts are explicit and auditable.
@@ -159,7 +162,8 @@ The text parser is intentionally strict so Discord-style alerts are explicit and
 Supported examples:
 
 ```text
-BUY BTCUSDT $125 @ 50000 SL 2.5% TP 5%
+BUY BTCUSDT $125 @ 50000 SL 2.5% TP 5% TRAIL 3%
+BUY SOLUSDT $50 @ 150 SL 3% TP 8% TS 4%
 SELL ETH/USDT 0.25 @ 3000
 ```
 
@@ -167,7 +171,7 @@ Validate text without placing an order:
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/signals/parse-text -ContentType "application/json" -Body '{
-  "message": "BUY SOLUSDT $50 @ 150 SL 3% TP 8%"
+  "message": "BUY SOLUSDT $50 @ 150 SL 3% TP 8% TRAIL 4%"
 }'
 ```
 
@@ -175,7 +179,7 @@ Run parsed text through the normal duplicate, risk, approval, and paper executio
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/webhooks/text-alert -ContentType "application/json" -Body '{
-  "message": "BUY SOLUSDT $50 @ 150 SL 3% TP 8%"
+  "message": "BUY SOLUSDT $50 @ 150 SL 3% TP 8% TRAIL 4%"
 }'
 ```
 
@@ -193,6 +197,7 @@ Recommended fields:
 - `price`, `entry_price`, or `limit_price`
 - `stop_loss_pct`
 - `take_profit_pct`
+- `trailing_stop_pct`
 - `max_slippage_bps`
 - `strategy_id` or `strategy`
 - `exchange` or `venue`

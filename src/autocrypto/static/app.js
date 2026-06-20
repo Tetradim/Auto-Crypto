@@ -839,9 +839,11 @@ function ticketToText() {
   const price = $("#ticketPrice").value || currentMarkPrice(symbol);
   const stop = $("#ticketStop").value;
   const takeProfit = $("#ticketTakeProfit").value;
+  const trailingStop = $("#ticketTrailingStop").value;
   const stopPart = stop ? ` SL ${stop}%` : "";
   const tpPart = takeProfit ? ` TP ${takeProfit}%` : "";
-  return `${side} ${symbol} ${size} @ ${price}${stopPart}${tpPart}`;
+  const trailingPart = trailingStop ? ` TRAIL ${trailingStop}%` : "";
+  return `${side} ${symbol} ${size} @ ${price}${stopPart}${tpPart}${trailingPart}`;
 }
 
 function ticketPayload() {
@@ -852,6 +854,7 @@ function ticketPayload() {
     price: $("#ticketPrice").value,
     stop_loss_pct: $("#ticketStop").value || null,
     take_profit_pct: $("#ticketTakeProfit").value || null,
+    trailing_stop_pct: $("#ticketTrailingStop").value || null,
     strategy_id: $("#ticketStrategy").value,
   };
   if ($("#ticketSizeMode").value === "base") {
@@ -919,6 +922,7 @@ function ticketDraftPayload() {
     price: $("#ticketPrice").value,
     stop_loss_pct: $("#ticketStop").value,
     take_profit_pct: $("#ticketTakeProfit").value,
+    trailing_stop_pct: $("#ticketTrailingStop").value,
     saved_at: new Date().toISOString(),
   };
 }
@@ -948,6 +952,7 @@ function applyStoredTicketDraft() {
   $("#ticketPrice").value = draft.price || $("#ticketPrice").value;
   $("#ticketStop").value = draft.stop_loss_pct || "";
   $("#ticketTakeProfit").value = draft.take_profit_pct || "";
+  $("#ticketTrailingStop").value = draft.trailing_stop_pct || "";
   appState.selectedPair = compactSymbol(draft.symbol || appState.selectedPair);
   $("#signalText").value = ticketToText();
   renderTicketDraftStatus(draft);
@@ -1137,6 +1142,7 @@ async function copyStrategy(strategyId) {
   $("#ticketPrice").value = strategy.price;
   $("#ticketStop").value = strategy.stop;
   $("#ticketTakeProfit").value = strategy.takeProfit;
+  $("#ticketTrailingStop").value = strategy.trailingStop || "";
   $("#signalText").value = ticketToText();
   writeImportedStrategy(strategy);
   appState.selectedPair = strategy.pair;
@@ -1200,6 +1206,7 @@ function inspectOrder(orderId) {
   $("#ticketPrice").value = order.price || "";
   $("#ticketStop").value = "";
   $("#ticketTakeProfit").value = "";
+  $("#ticketTrailingStop").value = "";
   $("#ticketStatus").textContent = `loaded ${orderId}`;
   saveTicketDraft();
   activateView("trading");
@@ -1227,6 +1234,7 @@ function loadSignalIntoTicket(signal, status) {
   $("#ticketPrice").value = signal.price || "";
   $("#ticketStop").value = signal.stop_loss_pct || "";
   $("#ticketTakeProfit").value = signal.take_profit_pct || "";
+  $("#ticketTrailingStop").value = signal.trailing_stop_pct || "";
   $("#ticketStatus").textContent = status;
   appState.selectedPair = compactSymbol(signal.symbol);
   saveTicketDraft();
@@ -1561,7 +1569,7 @@ function bindEvents() {
   $$("[data-size-preset]").forEach((button) => {
     button.addEventListener("click", () => applySizePreset(button.dataset.sizePreset));
   });
-  ["ticketSymbol", "ticketSide", "ticketAmount", "ticketPrice", "ticketStop", "ticketTakeProfit"].forEach((id) => {
+  ["ticketSymbol", "ticketSide", "ticketAmount", "ticketPrice", "ticketStop", "ticketTakeProfit", "ticketTrailingStop"].forEach((id) => {
     $(`#${id}`).addEventListener("input", saveTicketDraft);
     $(`#${id}`).addEventListener("change", saveTicketDraft);
   });

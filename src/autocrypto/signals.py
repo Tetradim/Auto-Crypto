@@ -24,6 +24,7 @@ class CryptoSignal:
     price: Decimal | None = None
     stop_loss_pct: Decimal | None = None
     take_profit_pct: Decimal | None = None
+    trailing_stop_pct: Decimal | None = None
     leverage: Decimal = Decimal("1")
     max_slippage_bps: int = 100
     strategy_id: str = "manual"
@@ -60,6 +61,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
     price = _optional_positive_decimal(payload.get("price") or payload.get("entry_price") or payload.get("limit_price"))
     stop_loss_pct = _optional_positive_decimal(payload.get("stop_loss_pct"))
     take_profit_pct = _optional_positive_decimal(payload.get("take_profit_pct"))
+    trailing_stop_pct = _optional_positive_decimal(payload.get("trailing_stop_pct"))
     leverage = _optional_positive_decimal(payload.get("leverage")) or Decimal("1")
     max_slippage_bps = _non_negative_int(payload.get("max_slippage_bps"), default=100)
     exchange = str(payload.get("exchange") or payload.get("venue") or "paper").strip().lower()
@@ -77,6 +79,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         "price": str(price) if price is not None else None,
         "stop_loss_pct": str(stop_loss_pct) if stop_loss_pct is not None else None,
         "take_profit_pct": str(take_profit_pct) if take_profit_pct is not None else None,
+        "trailing_stop_pct": str(trailing_stop_pct) if trailing_stop_pct is not None else None,
         "leverage": str(leverage),
         "max_slippage_bps": max_slippage_bps,
         "strategy_id": strategy_id,
@@ -95,6 +98,7 @@ def normalize_signal(payload: dict[str, Any], *, source: str) -> CryptoSignal:
         price=price,
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
+        trailing_stop_pct=trailing_stop_pct,
         leverage=leverage,
         max_slippage_bps=max_slippage_bps,
         strategy_id=strategy_id,

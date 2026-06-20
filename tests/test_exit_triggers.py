@@ -147,3 +147,32 @@ def test_manual_partial_sell_uses_same_lot_accounting_as_bracket_exits():
     assert triggered == [{"symbol": "BTC/USDT", "kind": "take_profit", "price": "220.00000000"}]
     assert after_exit["quantity"] == "0.00000000"
     assert after_exit["realized_pnl"] == "70.00000000"
+
+
+def test_trailing_stop_ratcheted_up_then_triggers_on_pullback():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "trailing-entry",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "2",
+            "take_profit_pct": "20",
+            "trailing_stop_pct": "5",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    first = exchange.update_price("BTC/USDT", Decimal("110"))
+    trailing_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    second = exchange.update_price("BTC/USDT", Decimal("104.50"))
+
+    assert first == []
+    assert trailing_exit.trigger_price == Decimal("104.50")
+    assert second == [{"symbol": "BTC/USDT", "kind": "trailing_stop", "price": "104.50000000"}]
+    assert exchange.list_positions()[0]["quantity"] == "0.00000000"
+    assert exchange.list_positions()[0]["realized_pnl"] == "4.50000000"

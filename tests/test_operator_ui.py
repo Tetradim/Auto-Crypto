@@ -164,7 +164,7 @@ def test_operator_text_submit_reuses_paper_execution_and_audit(tmp_path):
 
     response = client.post(
         "/signals/submit-text",
-        json={"message": "BUY BTCUSDT $75 @ 50000 SL 2% TP 5%"},
+        json={"message": "BUY BTCUSDT $75 @ 50000 SL 2% TP 5% TRAIL 3%"},
     )
 
     assert response.status_code == 200
@@ -176,6 +176,9 @@ def test_operator_text_submit_reuses_paper_execution_and_audit(tmp_path):
     assert state["active_exits"][0]["kind"] == "stop_loss"
     assert state["active_exits"][0]["remaining_quantity"] == "0.0015"
     assert state["active_exits"][0]["entry_price"] == "50000"
+    assert state["active_exits"][2]["kind"] == "trailing_stop"
+    assert state["active_exits"][2]["trigger_price"] == "48500.00"
+    assert state["active_exits"][2]["trailing_stop_pct"] == "3"
     assert [event["event_type"] for event in state["audit"]] == ["signal.received", "order.accepted"]
     assert all(event["created_at"] for event in state["audit"])
 
@@ -232,6 +235,7 @@ def test_operator_structured_preview_reflects_approval_mode(tmp_path):
             "price": "150",
             "stop_loss_pct": "3",
             "take_profit_pct": "6",
+            "trailing_stop_pct": "4",
             "strategy_id": "DCA Ladder",
         },
     )
@@ -259,6 +263,7 @@ def test_operator_json_submit_preserves_strategy_metadata(tmp_path):
             "price": "150",
             "stop_loss_pct": "3",
             "take_profit_pct": "6",
+            "trailing_stop_pct": "4",
             "strategy_id": "DCA Ladder",
         },
     )
@@ -267,7 +272,9 @@ def test_operator_json_submit_preserves_strategy_metadata(tmp_path):
     assert response.json()["status"] == "accepted"
     state = client.get("/ui/state").json()
     assert state["signals"][0]["strategy_id"] == "DCA Ladder"
+    assert state["signals"][0]["trailing_stop_pct"] == "4"
     assert state["orders"][0]["symbol"] == "SOL/USDT"
+    assert state["orders"][0]["trailing_stop_pct"] == "4"
 
 
 def test_operator_json_submit_supports_base_amount_sells(tmp_path):

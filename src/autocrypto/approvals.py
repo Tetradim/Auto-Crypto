@@ -38,6 +38,7 @@ def _summary(signal: CryptoSignal, *, created_at: str) -> dict:
         "price": str(signal.price) if signal.price is not None else None,
         "stop_loss_pct": str(signal.stop_loss_pct) if signal.stop_loss_pct is not None else None,
         "take_profit_pct": str(signal.take_profit_pct) if signal.take_profit_pct is not None else None,
+        "trailing_stop_pct": str(signal.trailing_stop_pct) if signal.trailing_stop_pct is not None else None,
         "strategy_id": signal.strategy_id,
         "created_at": created_at,
     }
