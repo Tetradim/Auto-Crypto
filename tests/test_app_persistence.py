@@ -325,3 +325,42 @@ def test_app_closes_bracket_with_audit_and_replays_after_restart(tmp_path):
     assert positions[0]["realized_pnl"] == "6.00000000"
     assert repo.list_orders()[-1]["exit_kind"] == "bracket_manual_close"
     assert repo.list_audit()[-1].event_type == "bracket.closed"
+
+
+def test_app_partially_closes_bracket_and_replays_remaining_exits_after_restart(tmp_path):
+    db_path = tmp_path / "bracket_partial_close_replay.sqlite3"
+    first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "replay-partial-close",
+            "symbol": "SOLUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+    )
+
+    reduced = first_client.post(
+        "/brackets/replay-partial-close/close",
+        json={"price": "106", "close_pct": "40", "reason": "operator scaled out"},
+    )
+    second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    bracket = second_client.get("/brackets/replay-partial-close").json()
+    triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "110"})
+    repo = SQLiteRepository(db_path)
+
+    assert reduced.status_code == 200
+    assert reduced.json()["order"]["exit_kind"] == "bracket_manual_reduce"
+    assert reduced.json()["order"]["notional"] == "42.4"
+    assert reduced.json()["order"]["canceled_exit_orders"] == []
+    assert reduced.json()["positions"][0]["quantity"] == "0.60000000"
+    assert bracket["summary"]["remaining_notional"] == "60.0"
+    assert bracket["active_exits"][0]["remaining_quantity"] == "0.6"
+    assert triggered.json()["triggered"] == [
+        {"symbol": "SOL/USDT", "kind": "take_profit", "price": "110.00000000", "quantity": "0.60000000"}
+    ]
+    assert repo.list_orders()[1]["exit_kind"] == "bracket_manual_reduce"
+    assert repo.list_audit()[2].data["close_pct"] == "40"

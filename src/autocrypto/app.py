@@ -549,8 +549,14 @@ def create_app(
         payload = await request.json()
         try:
             price = _positive_decimal(payload.get("price") or payload.get("mark_price"))
+            close_pct = _optional_positive_decimal(payload.get("close_pct"))
+            base_amount = _optional_positive_decimal(payload.get("base_amount") or payload.get("quantity") or payload.get("qty"))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if close_pct is not None and close_pct > 100:
+            raise HTTPException(status_code=400, detail="close_pct cannot exceed 100")
+        if close_pct is not None and base_amount is not None:
+            raise HTTPException(status_code=400, detail="send close_pct or base_amount, not both")
         reason = str(payload.get("reason") or "manual paper bracket close")
         lots = [
             lot
@@ -558,7 +564,13 @@ def create_app(
             if lot.signal_id == signal_id and lot.remaining_quantity > 0 and lot.exit_orders
         ]
         realized_before = _position_realized_pnl(engine.exchange, lots[0].symbol) if lots else Decimal("0")
-        order = engine.exchange.close_bracket(signal_id, price, reason=reason)
+        order = engine.exchange.close_bracket(
+            signal_id,
+            price,
+            close_pct=close_pct,
+            base_amount=base_amount,
+            reason=reason,
+        )
         if order is None:
             raise HTTPException(status_code=404, detail="active bracket not found")
         realized_pnl_delta = _position_realized_pnl(engine.exchange, order.symbol) - realized_before
@@ -577,6 +589,8 @@ def create_app(
                     "signal_id": signal_id,
                     "reason": reason,
                     "price": str(price),
+                    "close_pct": str(close_pct) if close_pct is not None else None,
+                    "base_amount": str(base_amount) if base_amount is not None else None,
                     "realized_pnl_delta": str(realized_pnl_delta),
                     "canceled_exit_orders": [
                         {
@@ -723,6 +737,18 @@ def _positive_decimal(value: Any) -> Decimal:
         raise ValueError(f"invalid price: {value}") from exc
     if parsed <= 0:
         raise ValueError("price must be positive")
+    return parsed
+
+
+def _optional_positive_decimal(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"invalid decimal: {value}") from exc
+    if parsed <= 0:
+        raise ValueError("decimal value must be positive")
     return parsed
 
 

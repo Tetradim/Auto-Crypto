@@ -677,6 +677,36 @@ def test_cancel_bracket_removes_exits_without_closing_position():
     assert exchange.active_exits == {}
 
 
+def test_cancel_bracket_records_pending_trailing_stop_as_canceled():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "cancel-pending-trail",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "trailing_stop_pct": "4",
+            "trailing_activation_pct": "3",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    cancel_order = exchange.cancel_bracket("cancel-pending-trail", reason="operator override")
+
+    assert cancel_order is not None
+    assert [(order.kind, order.status) for order in cancel_order.canceled_exit_orders] == [
+        ("stop_loss", "canceled"),
+        ("take_profit", "canceled"),
+        ("trailing_stop", "canceled"),
+    ]
+    assert exchange.active_exits == {}
+
+
 def test_close_bracket_closes_long_lot_and_cancels_synthetic_exits():
     exchange = PaperExchange()
     engine = TradingEngine(exchange=exchange)
@@ -714,6 +744,43 @@ def test_close_bracket_closes_long_lot_and_cancels_synthetic_exits():
     assert position["quantity"] == "0.00000000"
     assert position["realized_pnl"] == "7.00000000"
     assert exchange.active_exits == {}
+
+
+def test_close_bracket_can_partially_reduce_long_lot_and_keep_exits():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "partial-close-long-bracket",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    order = exchange.close_bracket("partial-close-long-bracket", Decimal("106"), close_pct=Decimal("25"))
+    position = exchange.list_positions()[0]
+    remaining_exits = exchange.active_exits["BTC/USDT"]
+    triggered = exchange.update_price("BTC/USDT", Decimal("110"))
+
+    assert order is not None
+    assert order.exit_kind == "bracket_manual_reduce"
+    assert order.side == "sell"
+    assert order.reduce_only is True
+    assert order.notional == Decimal("26.50")
+    assert order.canceled_exit_orders == []
+    assert position["quantity"] == "0.75000000"
+    assert position["realized_pnl"] == "1.50000000"
+    assert [exit_order.kind for exit_order in remaining_exits] == ["stop_loss", "take_profit"]
+    assert triggered == [
+        {"symbol": "BTC/USDT", "kind": "take_profit", "price": "110.00000000", "quantity": "0.75000000"}
+    ]
+    assert exchange.list_positions()[0]["realized_pnl"] == "9.00000000"
 
 
 def test_close_bracket_closes_short_lot_with_buy_reduce_only_order():

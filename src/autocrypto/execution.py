@@ -390,7 +390,7 @@ class PaperExchange:
                     status="canceled",
                 )
                 for exit_order in lot.exit_orders
-                if exit_order.status == "open"
+                if exit_order.status not in {"canceled", "filled"}
             )
             lot.exit_orders = []
 
@@ -412,8 +412,16 @@ class PaperExchange:
         self._refresh_active_exits(first_lot.symbol)
         return order
 
-    def close_bracket(self, signal_id: str, price: Decimal, *, reason: str = "") -> PaperOrder | None:
-        """Close a paper bracket lot at the supplied mark and cancel remaining synthetic exits."""
+    def close_bracket(
+        self,
+        signal_id: str,
+        price: Decimal,
+        *,
+        close_pct: Decimal | None = None,
+        base_amount: Decimal | None = None,
+        reason: str = "",
+    ) -> PaperOrder | None:
+        """Close or reduce a paper bracket lot at the supplied mark."""
         target_lots = [
             lot
             for lot in self.lots
@@ -430,13 +438,24 @@ class PaperExchange:
         fill_price = self._fill_price(exit_side, price)
         if fill_price is None:
             return None
+        total_remaining = sum((lot.remaining_quantity for lot in target_lots), Decimal("0"))
+        close_quantity_target = _bracket_close_quantity(
+            total_remaining,
+            close_pct=close_pct,
+            base_amount=base_amount,
+        )
+        if close_quantity_target is None:
+            return None
 
         closed_quantity = Decimal("0")
         exit_fee_total = Decimal("0")
         oca_group = first_lot.exit_orders[0].oca_group if first_lot.exit_orders else None
         canceled_exit_orders: list[ExitOrder] = []
         for lot in target_lots:
-            exit_quantity = lot.remaining_quantity
+            remaining_to_close = close_quantity_target - closed_quantity
+            if remaining_to_close <= 0:
+                break
+            exit_quantity = min(lot.remaining_quantity, remaining_to_close)
             exit_fee = self._fill_fee(exit_quantity, fill_price)
             closed_quantity += exit_quantity
             exit_fee_total += exit_fee
@@ -448,9 +467,11 @@ class PaperExchange:
             )
             self._close_lot(lot, fill_price, exit_quantity, exit_fee)
             canceled_exit_orders.extend(self._canceled_sibling_exits(lot, manual_exit))
-            lot.exit_orders = []
+            if lot.remaining_quantity <= 0:
+                lot.exit_orders = []
 
         self.lots = [lot for lot in self.lots if lot.remaining_quantity > 0]
+        exit_kind = "bracket_manual_close" if closed_quantity >= total_remaining else "bracket_manual_reduce"
         order = PaperOrder(
             order_id=f"paper-close-{_order_fragment(signal_id)}-{len(self.orders) + 1}",
             signal_id=signal_id,
@@ -469,7 +490,7 @@ class PaperExchange:
                     status="filled",
                 )
             ],
-            exit_kind="bracket_manual_close",
+            exit_kind=exit_kind,
             canceled_exit_orders=canceled_exit_orders,
             reduce_only=True,
             fee=exit_fee_total,
@@ -1269,6 +1290,25 @@ def _sync_trailing_water_mark(lot: PaperLot, trigger_price: Decimal) -> None:
 
 def _has_trailing_distance(trailing_stop_pct: Decimal | None, trailing_stop_amount: Decimal | None) -> bool:
     return trailing_stop_pct is not None or trailing_stop_amount is not None
+
+
+def _bracket_close_quantity(
+    total_remaining: Decimal,
+    *,
+    close_pct: Decimal | None,
+    base_amount: Decimal | None,
+) -> Decimal | None:
+    if total_remaining <= 0:
+        return None
+    if close_pct is not None:
+        if close_pct <= 0 or close_pct > 100:
+            return None
+        return min(total_remaining, total_remaining * close_pct / Decimal("100"))
+    if base_amount is not None:
+        if base_amount <= 0:
+            return None
+        return min(total_remaining, base_amount)
+    return total_remaining
 
 
 def _trailing_starts_activated(
