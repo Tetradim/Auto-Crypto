@@ -60,6 +60,7 @@ def evaluate_signal(
     else:
         stop_loss_pct = _stop_loss_pct(signal, reasons)
         take_profit_pct = _take_profit_pct(signal, reasons)
+        _validate_take_profit_targets(signal, reasons)
     if config.require_stop_loss and opens_position and stop_loss_pct is None:
         reasons.append("stop_loss_required")
     if order_notional is not None and config.max_order_notional > 0 and order_notional > config.max_order_notional:
@@ -173,3 +174,23 @@ def _take_profit_pct(signal: CryptoSignal, reasons: list[str]) -> Decimal | None
         reasons.append("invalid_take_profit_price")
         return None
     return (signal.price - target_price) / signal.price * Decimal("100")
+
+
+def _validate_take_profit_targets(signal: CryptoSignal, reasons: list[str]) -> None:
+    if not signal.take_profit_targets:
+        return
+    if signal.price is None:
+        _append_reason(reasons, "price_required_for_take_profit_price")
+        return
+    for target in signal.take_profit_targets:
+        if target.trigger_price is None:
+            continue
+        if signal.side == "buy" and target.trigger_price <= signal.price:
+            _append_reason(reasons, "invalid_take_profit_price")
+        if signal.side == "sell" and target.trigger_price >= signal.price:
+            _append_reason(reasons, "invalid_take_profit_price")
+
+
+def _append_reason(reasons: list[str], reason: str) -> None:
+    if reason not in reasons:
+        reasons.append(reason)

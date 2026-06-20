@@ -234,6 +234,50 @@ def test_risk_rejects_inverted_absolute_bracket_prices():
     assert "invalid_take_profit_price" in decision.reason_codes
 
 
+def test_risk_rejects_later_staged_take_profit_target_below_long_entry():
+    signal = normalize_signal(
+        {
+            "symbol": "ETH/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_price": "95",
+            "take_profit_targets": [
+                {"trigger_price": "104", "close_pct": "50"},
+                {"trigger_price": "99", "close_pct": "50"},
+            ],
+        },
+        source="test",
+    )
+
+    decision = evaluate_signal(signal, RiskConfig(require_stop_loss=True), AccountState())
+
+    assert decision.approved is False
+    assert "invalid_take_profit_price" in decision.reason_codes
+
+
+def test_risk_rejects_staged_take_profit_target_above_short_entry():
+    signal = normalize_signal(
+        {
+            "symbol": "ETH/USDT",
+            "side": "sell",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_price": "105",
+            "take_profit_targets": [
+                {"trigger_price": "96", "close_pct": "50"},
+                {"trigger_price": "101", "close_pct": "50"},
+            ],
+        },
+        source="test",
+    )
+
+    decision = evaluate_signal(signal, RiskConfig(require_stop_loss=True), AccountState())
+
+    assert decision.approved is False
+    assert "invalid_take_profit_price" in decision.reason_codes
+
+
 def test_risk_treats_reduce_only_close_as_non_opening_even_without_stop_loss():
     signal = normalize_signal(
         {
