@@ -33,7 +33,7 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Supports protective stop, trailing-stop, take-profit, and manual breakeven amendments; protective exits only tighten risk and take-profit targets only move farther into profit
 - Supports paper-only trailing-stop tightening from a supplied favorable mark, computing the next synthetic trail trigger from the configured percentage or fixed trail distance while rejecting marks that would loosen risk
 - Supports paper-only bracket close-by-signal controls that flatten or partially reduce the selected simulated bracket at an operator-supplied mark or at the current nearest protective trigger
-- Previews one active bracket by signal ID at a hypothetical mark, through a multi-mark path, or through a conservative OHLC candle path, including trigger distance, trailing activation context, and simulated post-mark trailing ratchets without mutating live paper state
+- Previews one active bracket by signal ID at a hypothetical mark, through a multi-mark path, or through an OHLC candle path with conservative adverse-first or favorable-first sequencing, optional open mark, ambiguous stop/target range flags, trigger distance, trailing activation context, and simulated post-mark trailing ratchets without mutating live paper state
 - Shows a paper bracket exit ladder by signal ID with trigger order, estimated close quantity, estimated notional, estimated P&L, and optional mark-distance math for each stop, trailing, take-profit, or time-stop leg
 - Shows read-only bracket decision support by signal ID with paper exit sequencing, health flags, and next-trailing-ratchet telemetry for a supplied mark
 - Cancels active synthetic paper bracket exits by signal ID while leaving the underlying paper position open for separate manual management
@@ -248,9 +248,11 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-
 }'
 
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-001/preview-candle -ContentType "application/json" -Body '{
+  "open": "50600",
   "high": "52400",
   "low": "49750",
-  "close": "51100"
+  "close": "51100",
+  "intrabar_policy": "conservative_adverse_first"
 }'
 
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-001/stop -ContentType "application/json" -Body '{
@@ -301,7 +303,9 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/brackets/btc-breakout-
 
 `POST /brackets/{signal_id}/preview-path` is also signal-specific and paper-only. Send `prices` or `marks` as a non-empty list to replay several hypothetical marks through one deep-copied bracket state. The response includes each mark's `would_trigger` exits, `preview_active_exits` after that mark, simulated preview positions, and `mutates_state: false`; the live paper bracket, positions, audit log, and order history are unchanged. This is useful for reviewing whether an activation-gated or stepped trailing stop would ratchet before it would trigger.
 
-`POST /brackets/{signal_id}/preview-candle` is the OHLC version of bracket path preview. Send `high`, `low`, and `close`; Auto-Crypto replays the copied bracket with a conservative adverse-first intrabar policy, so long brackets test `low`, `high`, then `close`, while short brackets test `high`, `low`, then `close`. If both the stop and target are inside the same candle range, the preview favors the protective exit rather than overstating a profitable target fill. The active paper bracket, trailing water marks, positions, audit log, and order history are unchanged.
+`POST /brackets/{signal_id}/preview-candle` is the OHLC version of bracket path preview. Send `high`, `low`, and `close`, plus optional `open`/`open_price` and optional `intrabar_policy`. The default `conservative_adverse_first` policy replays the copied bracket as open, adverse extreme, favorable extreme, close; for long brackets that is `open`, `low`, `high`, `close`, while short brackets use `open`, `high`, `low`, `close`. Send `intrabar_policy: "favorable_first"` to compare the optimistic opposite sequence. Responses include `ambiguous_intrabar: true` and an `ambiguity` block when both protective and profit-taking exits are inside the same candle range, because OHLC data alone cannot prove which exit happened first. The active paper bracket, trailing water marks, positions, audit log, and order history are unchanged.
+
+This preview behavior follows three implementation notes from current trading-bot references. CCXT documents attached `stopLoss`/`takeProfit` order support as exchange-dependent, so Auto-Crypto keeps these previews synthetic and paper-only until venue-specific mappings are reviewed (<https://docs.ccxt.com/docs/faq>). Backtrader's bracket-order docs model a bracket as a parent entry with linked stop-loss and take-profit children, with opposite-side exits for short positions, which matches the long-sell and short-buy paper exit accounting here (<https://www.backtrader.com/docu/order-creation-execution/bracket/bracket/>). Backtrader's trailing-stop docs describe long trails following price upward while short trails do the opposite, and the 2026 TradeZella backtesting guide warns that slippage, commissions, and execution assumptions matter, so Auto-Crypto exposes policy comparison instead of pretending one OHLC ordering is certain (<https://www.backtrader.com/docu/order-creation-execution/trail/stoptrail/>, <https://www.tradezella.com/blog/backtesting-trading-strategies>).
 
 `GET /brackets/{signal_id}/exit-ladder` is also signal-specific and paper-only. It lists the bracket's synthetic exits in the direction they would be encountered by price, including each leg's intent, status, `close_pct`, estimated close quantity, estimated trigger notional, estimated P&L, and whether that leg would close the remaining paper lot. Add `?mark_price=...` to include current distance-to-trigger values without mutating trailing stops or recording any order.
 

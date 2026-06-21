@@ -509,6 +509,7 @@ def create_app(
     async def bracket_preview_candle(signal_id: str, request: Request) -> dict[str, Any]:
         payload = await request.json()
         try:
+            open_price = _optional_positive_decimal(payload.get("open") or payload.get("open_price"))
             high = _positive_decimal(payload.get("high"))
             low = _positive_decimal(payload.get("low"))
             close = _positive_decimal(payload.get("close"))
@@ -516,8 +517,13 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if high < low:
             raise HTTPException(status_code=400, detail="high must be greater than or equal to low")
+        if open_price is not None and (open_price < low or open_price > high):
+            raise HTTPException(status_code=400, detail="open must be inside the high/low range")
         if close < low or close > high:
             raise HTTPException(status_code=400, detail="close must be inside the high/low range")
+        intrabar_policy = str(payload.get("intrabar_policy") or payload.get("policy") or "conservative_adverse_first")
+        if intrabar_policy not in {"conservative_adverse_first", "favorable_first"}:
+            raise HTTPException(status_code=400, detail="unsupported intrabar_policy")
 
         lots = [
             lot
@@ -531,13 +537,21 @@ def create_app(
 
         symbol = lots[0].symbol
         direction = lots[0].direction
-        prices = [low, high, close] if direction == "long" else [high, low, close]
+        marks_to_preview = _candle_preview_marks(
+            direction=direction,
+            high=high,
+            low=low,
+            close=close,
+            open_price=open_price,
+            intrabar_policy=intrabar_policy,
+        )
+        ambiguity = _candle_ambiguity(lots, high=high, low=low)
         preview_exchange = deepcopy(engine.exchange)
         preview_exchange.lots = [
             lot for lot in preview_exchange.lots if lot.signal_id == signal_id or lot.symbol != symbol
         ]
         marks: list[dict[str, Any]] = []
-        for phase, price in zip(("adverse", "favorable", "close"), prices, strict=True):
+        for phase, price in marks_to_preview:
             triggered = preview_exchange.update_price(symbol, price)
             marks.append(
                 {
@@ -557,12 +571,16 @@ def create_app(
             "signal_id": signal_id,
             "symbol": symbol,
             "mutates_state": False,
-            "intrabar_policy": "conservative_adverse_first",
+            "intrabar_policy": intrabar_policy,
+            "supported_intrabar_policies": ["conservative_adverse_first", "favorable_first"],
+            "ambiguous_intrabar": ambiguity["ambiguous"],
+            "ambiguity": ambiguity,
             "direction": direction,
+            "open": str(open_price) if open_price is not None else None,
             "high": str(high),
             "low": str(low),
             "close": str(close),
-            "prices": [str(price) for price in prices],
+            "prices": [str(price) for _, price in marks_to_preview],
             "active_exits": _active_exits_to_dict(lots, signal_id=signal_id),
             "marks": marks,
             "final_preview_positions": preview_exchange.list_positions(),
@@ -1535,6 +1553,84 @@ def _total_target_reward(signal: CryptoSignal, notional: Decimal | None, exits: 
 def _position_realized_pnl(exchange: PaperExchange, symbol: str) -> Decimal:
     position = exchange.positions.get(symbol)
     return position.realized_pnl if position else Decimal("0")
+
+
+def _candle_preview_marks(
+    *,
+    direction: str,
+    high: Decimal,
+    low: Decimal,
+    close: Decimal,
+    open_price: Decimal | None,
+    intrabar_policy: str,
+) -> list[tuple[str, Decimal]]:
+    adverse = low if direction == "long" else high
+    favorable = high if direction == "long" else low
+    if intrabar_policy == "favorable_first":
+        phases = [("favorable", favorable), ("adverse", adverse), ("close", close)]
+    else:
+        phases = [("adverse", adverse), ("favorable", favorable), ("close", close)]
+    if open_price is None:
+        return phases
+    return [("open", open_price), *phases]
+
+
+def _candle_ambiguity(lots: list[Any], *, high: Decimal, low: Decimal) -> dict[str, Any]:
+    rows = [_lot_candle_ambiguity(lot, high=high, low=low) for lot in lots]
+    protective_touched = sum(row["protective_touched"] for row in rows)
+    profit_touched = sum(row["profit_touched"] for row in rows)
+    ambiguous_lots = [row for row in rows if row["ambiguous"]]
+    return {
+        "ambiguous": bool(ambiguous_lots),
+        "policy_note": "candle range contains both protective and profit exits; compare policies before trusting a single-fill outcome"
+        if ambiguous_lots
+        else None,
+        "protective_touched_count": protective_touched,
+        "profit_touched_count": profit_touched,
+        "lots": rows,
+    }
+
+
+def _lot_candle_ambiguity(lot: Any, *, high: Decimal, low: Decimal) -> dict[str, Any]:
+    protective: list[dict[str, str]] = []
+    profit: list[dict[str, str]] = []
+    for exit_order in lot.exit_orders:
+        if exit_order.status not in {"open", "waiting"}:
+            continue
+        touched = _exit_touched_by_candle(lot, exit_order, high=high, low=low)
+        if not touched:
+            continue
+        row = {"kind": exit_order.kind, "trigger_price": str(exit_order.trigger_price)}
+        if exit_order.kind in {"stop_loss", "trailing_stop", "time_exit"}:
+            protective.append(row)
+        elif exit_order.kind == "take_profit":
+            profit.append(row)
+    return {
+        "signal_id": lot.signal_id,
+        "symbol": lot.symbol,
+        "direction": lot.direction,
+        "protective_touched": len(protective),
+        "profit_touched": len(profit),
+        "ambiguous": bool(protective and profit),
+        "protective_exits": protective,
+        "profit_exits": profit,
+    }
+
+
+def _exit_touched_by_candle(lot: Any, exit_order: Any, *, high: Decimal, low: Decimal) -> bool:
+    if exit_order.kind == "time_exit":
+        return False
+    if lot.direction == "long":
+        if exit_order.kind in {"stop_loss", "trailing_stop"}:
+            return low <= exit_order.trigger_price
+        if exit_order.kind == "take_profit":
+            return high >= exit_order.trigger_price
+        return False
+    if exit_order.kind in {"stop_loss", "trailing_stop"}:
+        return high >= exit_order.trigger_price
+    if exit_order.kind == "take_profit":
+        return low <= exit_order.trigger_price
+    return False
 
 
 def _planned_trailing_activation_price(signal: CryptoSignal) -> Decimal | None:

@@ -903,6 +903,9 @@ def test_bracket_preview_candle_uses_conservative_long_intrabar_order_without_mu
     body = response.json()
     assert body["mutates_state"] is False
     assert body["intrabar_policy"] == "conservative_adverse_first"
+    assert body["ambiguous_intrabar"] is True
+    assert body["ambiguity"]["protective_touched_count"] == 1
+    assert body["ambiguity"]["profit_touched_count"] == 1
     assert body["direction"] == "long"
     assert body["prices"] == ["95", "110", "108"]
     assert body["marks"][0]["phase"] == "adverse"
@@ -913,6 +916,83 @@ def test_bracket_preview_candle_uses_conservative_long_intrabar_order_without_mu
     assert body["final_preview_positions"][0]["realized_pnl"] == "-5.00000000"
     assert [exit_order["kind"] for exit_order in active_after] == ["stop_loss", "take_profit"]
     assert client.get("/positions").json()["positions"][0]["quantity"] == "1.00000000"
+
+
+def test_bracket_preview_candle_can_compare_favorable_first_path_with_open_mark():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "long-candle-favorable-preview",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+    )
+
+    response = client.post(
+        "/brackets/long-candle-favorable-preview/preview-candle",
+        json={
+            "open": "101",
+            "high": "110",
+            "low": "95",
+            "close": "98",
+            "intrabar_policy": "favorable_first",
+        },
+    )
+    active_after = client.get("/brackets/long-candle-favorable-preview").json()["active_exits"]
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intrabar_policy"] == "favorable_first"
+    assert body["open"] == "101"
+    assert body["prices"] == ["101", "110", "95", "98"]
+    assert [mark["phase"] for mark in body["marks"]] == ["open", "favorable", "adverse", "close"]
+    assert body["ambiguous_intrabar"] is True
+    assert body["marks"][1]["would_trigger"] == [
+        {"symbol": "BTC/USDT", "kind": "take_profit", "price": "110.00000000", "quantity": "1.00000000"}
+    ]
+    assert body["marks"][2]["would_trigger"] == []
+    assert body["final_preview_positions"][0]["realized_pnl"] == "10.00000000"
+    assert [exit_order["kind"] for exit_order in active_after] == ["stop_loss", "take_profit"]
+    assert client.get("/positions").json()["positions"][0]["quantity"] == "1.00000000"
+
+
+def test_bracket_preview_candle_rejects_open_outside_range_and_unknown_policy():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "invalid-candle-preview",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+    )
+
+    invalid_open = client.post(
+        "/brackets/invalid-candle-preview/preview-candle",
+        json={"open": "111", "high": "110", "low": "95", "close": "100"},
+    )
+    invalid_policy = client.post(
+        "/brackets/invalid-candle-preview/preview-candle",
+        json={"high": "110", "low": "95", "close": "100", "intrabar_policy": "random"},
+    )
+
+    assert invalid_open.status_code == 400
+    assert invalid_open.json()["detail"] == "open must be inside the high/low range"
+    assert invalid_policy.status_code == 400
+    assert invalid_policy.json()["detail"] == "unsupported intrabar_policy"
 
 
 def test_bracket_preview_candle_uses_conservative_short_intrabar_order_without_mutating_state():
