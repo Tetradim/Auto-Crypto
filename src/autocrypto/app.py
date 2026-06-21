@@ -601,25 +601,24 @@ def create_app(
             intrabar_policy=intrabar_policy,
         )
         ambiguity = _candle_ambiguity(lots, high=high, low=low)
-        preview_exchange = deepcopy(engine.exchange)
-        preview_exchange.lots = [
-            lot for lot in preview_exchange.lots if lot.signal_id == signal_id or lot.symbol != symbol
-        ]
-        marks: list[dict[str, Any]] = []
-        for phase, price in marks_to_preview:
-            triggered = preview_exchange.update_price(symbol, price)
-            marks.append(
-                {
-                    "phase": phase,
-                    "price": str(price),
-                    "would_trigger": triggered,
-                    "preview_active_exits": _active_exits_to_dict(
-                        preview_exchange.lots,
-                        signal_id=signal_id,
-                        mark_price=price,
-                    ),
-                    "preview_positions": preview_exchange.list_positions(),
-                }
+        preview = _simulate_bracket_mark_sequence(
+            engine.exchange,
+            signal_id=signal_id,
+            symbol=symbol,
+            marks_to_preview=marks_to_preview,
+        )
+        compare_policies = _truthy(payload.get("compare_policies") or payload.get("compare_intrabar_policies"))
+        policy_comparison = None
+        if compare_policies:
+            policy_comparison = _candle_policy_comparison(
+                engine.exchange,
+                signal_id=signal_id,
+                symbol=symbol,
+                direction=direction,
+                high=high,
+                low=low,
+                close=close,
+                open_price=open_price,
             )
 
         return {
@@ -637,8 +636,10 @@ def create_app(
             "close": str(close),
             "prices": [str(price) for _, price in marks_to_preview],
             "active_exits": _active_exits_to_dict(lots, signal_id=signal_id),
-            "marks": marks,
-            "final_preview_positions": preview_exchange.list_positions(),
+            "marks": preview["marks"],
+            "outcome": preview["outcome"],
+            "policy_comparison": policy_comparison,
+            "final_preview_positions": preview["final_preview_positions"],
             "positions": engine.exchange.list_positions(),
             "account": _account_state_to_dict(engine.account_state),
         }
@@ -1361,6 +1362,14 @@ def _optional_positive_decimal(value: Any) -> Decimal | None:
     return parsed
 
 
+def _truthy(value: Any) -> bool:
+    if value is None or value == "":
+        return False
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _non_negative_int(value: Any, *, default: int) -> int:
     if value is None or value == "":
         return default
@@ -1805,6 +1814,108 @@ def _candle_preview_marks(
     if open_price is None:
         return phases
     return [("open", open_price), *phases]
+
+
+def _simulate_bracket_mark_sequence(
+    base_exchange: PaperExchange,
+    *,
+    signal_id: str,
+    symbol: str,
+    marks_to_preview: list[tuple[str, Decimal]],
+) -> dict[str, Any]:
+    preview_exchange = deepcopy(base_exchange)
+    preview_exchange.lots = [
+        lot for lot in preview_exchange.lots if lot.signal_id == signal_id or lot.symbol != symbol
+    ]
+    marks: list[dict[str, Any]] = []
+    triggered_rows: list[dict[str, Any]] = []
+    for phase, price in marks_to_preview:
+        triggered = preview_exchange.update_price(symbol, price)
+        for row in triggered:
+            triggered_rows.append({"phase": phase, **row})
+        marks.append(
+            {
+                "phase": phase,
+                "price": str(price),
+                "would_trigger": triggered,
+                "preview_active_exits": _active_exits_to_dict(
+                    preview_exchange.lots,
+                    signal_id=signal_id,
+                    mark_price=price,
+                ),
+                "preview_positions": preview_exchange.list_positions(),
+            }
+        )
+    positions = preview_exchange.list_positions()
+    final_position = next((position for position in positions if position["symbol"] == symbol), None)
+    remaining_quantity = sum(
+        (
+            lot.remaining_quantity
+            for lot in preview_exchange.lots
+            if lot.signal_id == signal_id and lot.symbol == symbol and lot.remaining_quantity > 0
+        ),
+        Decimal("0"),
+    )
+    first_trigger = triggered_rows[0] if triggered_rows else None
+    return {
+        "marks": marks,
+        "final_preview_positions": positions,
+        "outcome": {
+            "trigger_count": len(triggered_rows),
+            "triggered_kinds": [row["kind"] for row in triggered_rows],
+            "first_trigger_phase": first_trigger["phase"] if first_trigger else None,
+            "first_trigger_kind": first_trigger["kind"] if first_trigger else None,
+            "bracket_closed": remaining_quantity == 0,
+            "remaining_quantity": _decimal_to_plain(remaining_quantity),
+            "final_position_quantity": final_position["quantity"] if final_position else "0.00000000",
+            "final_realized_pnl": final_position["realized_pnl"] if final_position else "0.00000000",
+        },
+    }
+
+
+def _candle_policy_comparison(
+    base_exchange: PaperExchange,
+    *,
+    signal_id: str,
+    symbol: str,
+    direction: str,
+    high: Decimal,
+    low: Decimal,
+    close: Decimal,
+    open_price: Decimal | None,
+) -> dict[str, Any]:
+    outcomes: dict[str, Any] = {}
+    for policy in ("conservative_adverse_first", "favorable_first"):
+        marks_to_preview = _candle_preview_marks(
+            direction=direction,
+            high=high,
+            low=low,
+            close=close,
+            open_price=open_price,
+            intrabar_policy=policy,
+        )
+        preview = _simulate_bracket_mark_sequence(
+            base_exchange,
+            signal_id=signal_id,
+            symbol=symbol,
+            marks_to_preview=marks_to_preview,
+        )
+        outcomes[policy] = {
+            "prices": [str(price) for _, price in marks_to_preview],
+            "phases": [phase for phase, _ in marks_to_preview],
+            "outcome": preview["outcome"],
+        }
+    conservative_pnl = Decimal(outcomes["conservative_adverse_first"]["outcome"]["final_realized_pnl"])
+    favorable_pnl = Decimal(outcomes["favorable_first"]["outcome"]["final_realized_pnl"])
+    return {
+        "policies": outcomes,
+        "outcome_diverged": outcomes["conservative_adverse_first"]["outcome"] != outcomes["favorable_first"]["outcome"],
+        "pnl_range": {
+            "low": _decimal_to_plain(min(conservative_pnl, favorable_pnl)),
+            "high": _decimal_to_plain(max(conservative_pnl, favorable_pnl)),
+            "spread": _decimal_to_plain(abs(favorable_pnl - conservative_pnl)),
+        },
+    }
 
 
 def _candle_ambiguity(lots: list[Any], *, high: Decimal, low: Decimal) -> dict[str, Any]:

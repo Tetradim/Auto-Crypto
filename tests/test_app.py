@@ -1136,6 +1136,17 @@ def test_bracket_preview_candle_uses_conservative_long_intrabar_order_without_mu
         {"symbol": "BTC/USDT", "kind": "stop_loss", "price": "95.00000000", "quantity": "1.00000000"}
     ]
     assert body["marks"][1]["would_trigger"] == []
+    assert body["outcome"] == {
+        "trigger_count": 1,
+        "triggered_kinds": ["stop_loss"],
+        "first_trigger_phase": "adverse",
+        "first_trigger_kind": "stop_loss",
+        "bracket_closed": True,
+        "remaining_quantity": "0",
+        "final_position_quantity": "0.00000000",
+        "final_realized_pnl": "-5.00000000",
+    }
+    assert body["policy_comparison"] is None
     assert body["final_preview_positions"][0]["realized_pnl"] == "-5.00000000"
     assert [exit_order["kind"] for exit_order in active_after] == ["stop_loss", "take_profit"]
     assert client.get("/positions").json()["positions"][0]["quantity"] == "1.00000000"
@@ -1182,6 +1193,43 @@ def test_bracket_preview_candle_can_compare_favorable_first_path_with_open_mark(
     ]
     assert body["marks"][2]["would_trigger"] == []
     assert body["final_preview_positions"][0]["realized_pnl"] == "10.00000000"
+    assert [exit_order["kind"] for exit_order in active_after] == ["stop_loss", "take_profit"]
+    assert client.get("/positions").json()["positions"][0]["quantity"] == "1.00000000"
+
+
+def test_bracket_preview_candle_compares_intrabar_policy_outcomes_without_mutating_state():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "compare-candle-policies",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+    )
+
+    response = client.post(
+        "/brackets/compare-candle-policies/preview-candle",
+        json={"high": "110", "low": "95", "close": "100", "compare_policies": True},
+    )
+    active_after = client.get("/brackets/compare-candle-policies").json()["active_exits"]
+
+    assert response.status_code == 200
+    comparison = response.json()["policy_comparison"]
+    conservative = comparison["policies"]["conservative_adverse_first"]["outcome"]
+    favorable = comparison["policies"]["favorable_first"]["outcome"]
+    assert comparison["outcome_diverged"] is True
+    assert comparison["pnl_range"] == {"low": "-5.00000000", "high": "10.00000000", "spread": "15.00000000"}
+    assert conservative["first_trigger_kind"] == "stop_loss"
+    assert conservative["first_trigger_phase"] == "adverse"
+    assert favorable["first_trigger_kind"] == "take_profit"
+    assert favorable["first_trigger_phase"] == "favorable"
     assert [exit_order["kind"] for exit_order in active_after] == ["stop_loss", "take_profit"]
     assert client.get("/positions").json()["positions"][0]["quantity"] == "1.00000000"
 
