@@ -33,6 +33,7 @@ def test_operator_ui_is_served_from_backend():
     assert "strategySearch" in ui.text
     assert "strategySort" in ui.text
     assert "strategyResultCount" in ui.text
+    assert "Guarded strategy presets" in ui.text
     assert "deskSearch" in ui.text
     assert "deskResultCount" in ui.text
     assert "Filter positions or orders" in ui.text
@@ -141,6 +142,12 @@ def test_operator_ui_is_served_from_backend():
     assert "strategyBacktestSummary" in script.text
     assert "writeStoredBacktests" in script.text
     assert "backtestSortValue" in script.text
+    assert "loadStrategyPresets" in script.text
+    assert "strategyPresetCard" in script.text
+    assert "report_metrics" in script.text
+    assert "profit_factor" in script.text
+    assert "win_rate_pct" in script.text
+    assert "/backtest/signal" in script.text
     assert "compareOptional" in script.text
     assert "deskSearch" in script.text
     assert "deskRowMatches" in script.text

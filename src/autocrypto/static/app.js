@@ -30,12 +30,13 @@ const {
   writeImportedStrategy,
 } = window.AutoCryptoStorage;
 const { api } = window.AutoCryptoApi;
-const { defaultMarkets, strategies } = window.AutoCryptoCatalog;
+const { defaultMarkets, strategies: fallbackStrategies } = window.AutoCryptoCatalog;
 
 const appState = {
   data: null,
   exchanges: [],
   platforms: [],
+  strategies: fallbackStrategies,
   activeView: "dashboard",
   selectedPair: "BTCUSDT",
   timeframe: "15m",
@@ -82,6 +83,7 @@ async function loadState(showStatus = true) {
     appState.data = await api("/ui/state");
     await loadExchanges(false);
     await loadPlatforms(false);
+    await loadStrategyPresets(false);
     renderAll();
     if (showStatus) setStatus("State refreshed from Auto-Crypto API.", "ok");
   } catch (error) {
@@ -131,6 +133,54 @@ async function loadPlatforms(showStatus = true) {
     appState.platforms = [];
     if (showStatus) setStatus(`Platform registry failed: ${error.message}`, "error");
   }
+}
+
+async function loadStrategyPresets(showStatus = true) {
+  try {
+    const payload = await api("/strategy-presets");
+    const presets = payload.presets || [];
+    appState.strategies = presets.length ? presets.map(strategyPresetCard) : fallbackStrategies;
+    if (showStatus) setStatus(`Loaded ${presets.length} strategy presets.`, "ok");
+  } catch (error) {
+    appState.strategies = fallbackStrategies;
+    if (showStatus) setStatus(`Strategy preset loading failed: ${error.message}`, "error");
+  }
+}
+
+function strategyPresetCard(preset) {
+  const defaults = preset.signal_defaults || {};
+  const backtest = preset.backtest_defaults || {};
+  const pair = preset.name === "dip_reclaim" ? "ETHUSDT" : preset.name === "range_reversion_short" ? "SOLUSDT" : "BTCUSDT";
+  return {
+    id: preset.name,
+    name: titleizePreset(preset.name),
+    type: "signal",
+    pair,
+    amount: "100",
+    price: "",
+    stop: "",
+    takeProfit: "",
+    trailingStop: "",
+    breakeven: "",
+    roi: "preview",
+    win: "n/a",
+    drawdown: "n/a",
+    preset,
+    strategy_id: defaults.strategy_id || preset.name,
+    side: defaults.side || "buy",
+    market_type: defaults.market_type || "swap",
+    bracketTemplate: preset.suggested_bracket_template,
+    interval: backtest.interval || "1h",
+    entryLogic: preset.entry_logic || [],
+  };
+}
+
+function titleizePreset(value) {
+  return String(value || "")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function renderAll() {
@@ -683,7 +733,7 @@ function renderDeskTable() {
 function renderStrategies() {
   const pinned = readPinnedStrategies();
   const needle = appState.strategySearch.trim().toLowerCase();
-  const visible = strategies
+  const visible = appState.strategies
     .filter((strategy) => appState.strategyFilter === "all" || strategy.type === appState.strategyFilter)
     .filter((strategy) => {
       if (!needle) return true;
@@ -715,8 +765,8 @@ function renderStrategies() {
   $("#strategyCards").innerHTML = visible.length
     ? visible.map((strategy) => strategyCard(strategy, pinned.has(strategy.id))).join("")
     : `<div class="empty-state strategy-empty">No strategies match the current search.</div>`;
-  const activePinned = strategies.filter((strategy) => pinned.has(strategy.id)).length;
-  $("#strategyResultCount").textContent = `${visible.length}/${strategies.length} shown | ${activePinned} pinned`;
+  const activePinned = appState.strategies.filter((strategy) => pinned.has(strategy.id)).length;
+  $("#strategyResultCount").textContent = `${visible.length}/${appState.strategies.length} shown | ${activePinned} pinned`;
   const imported = readImportedStrategy();
   $("#importStatus").textContent = imported ? `loaded: ${imported.name}` : "waiting";
   $("#strategyChecklist").innerHTML = [
@@ -735,15 +785,15 @@ function strategyCard(strategy, isPinned) {
     <article class="strategy-card ${isPinned ? "is-pinned" : ""}">
       <div class="strategy-head">
         <strong>${escapeHtml(strategy.name)}</strong>
-        <span>${escapeHtml(strategy.type.toUpperCase())} | ${prettySymbol(strategy.pair)}</span>
+      <span>${escapeHtml(strategy.type.toUpperCase())} | ${prettySymbol(strategy.pair)}${strategy.bracketTemplate ? ` | ${escapeHtml(strategy.bracketTemplate)}` : ""}</span>
         <button type="button" data-action="toggle-strategy-pin" data-strategy-id="${strategy.id}" aria-pressed="${isPinned}">${isPinned ? "Pinned" : "Pin"}</button>
       </div>
       <canvas data-strategy-spark="${strategy.id}" width="320" height="96" aria-label="${escapeHtml(strategy.name)} backtest curve"></canvas>
       ${strategyBacktestSummary(strategy)}
       <dl>
-        <div><dt>300D ROI</dt><dd class="up">${strategy.roi}</dd></div>
-        <div><dt>Win rate</dt><dd>${strategy.win}</dd></div>
-        <div><dt>Max DD</dt><dd>${strategy.drawdown}</dd></div>
+        <div><dt>Preset</dt><dd>${escapeHtml(strategy.strategy_id || strategy.roi)}</dd></div>
+        <div><dt>Win rate</dt><dd>${escapeHtml(strategy.win)}</dd></div>
+        <div><dt>Max DD</dt><dd>${escapeHtml(strategy.drawdown)}</dd></div>
       </dl>
       <div class="strategy-actions">
         <button type="button" data-action="backtest-strategy" data-strategy-id="${strategy.id}">Backtest</button>
@@ -767,6 +817,8 @@ function strategyBacktestSummary(strategy) {
   return `
     <div class="strategy-backtest">
       <span>Sim return<strong class="${backtest.return_pct >= 0 ? "up" : "down"}">${percent(backtest.return_pct)}</strong></span>
+      <span>Win rate<strong>${backtest.win_rate_pct === null || backtest.win_rate_pct === undefined ? "-" : `${Number(backtest.win_rate_pct).toFixed(1)}%`}</strong></span>
+      <span>PF<strong>${backtest.profit_factor === null || backtest.profit_factor === undefined ? "-" : Number(backtest.profit_factor).toFixed(2)}</strong></span>
       <span>Sim DD<strong>${Math.abs(Number(backtest.max_drawdown_pct || 0)).toFixed(2)}%</strong></span>
       <span>Last run<strong>${escapeHtml(formatBacktestTime(backtest.updated_at))}</strong></span>
     </div>
@@ -1379,13 +1431,13 @@ async function loadBitunixAccount() {
 }
 
 async function copyStrategy(strategyId) {
-  const strategy = strategies.find((item) => item.id === strategyId);
+  const strategy = appState.strategies.find((item) => item.id === strategyId);
   if (!strategy) return;
   setTicketStrategy(strategy.name);
   $("#ticketSymbol").value = strategy.pair;
-  $("#ticketSide").value = "BUY";
+  $("#ticketSide").value = String(strategy.side || "buy").toUpperCase();
   setTicketSizeMode("quote", strategy.amount);
-  $("#ticketPrice").value = strategy.price;
+  $("#ticketPrice").value = strategy.price || String(currentMarkPrice(strategy.pair));
   $("#ticketStop").value = strategy.stop;
   $("#ticketTakeProfit").value = strategy.takeProfit;
   $("#ticketTrailingStop").value = strategy.trailingStop || "";
@@ -1403,35 +1455,60 @@ async function copyStrategy(strategyId) {
   $("#ticketStatus").textContent = `risk: ${status}`;
 }
 
-function runBacktest(strategyId) {
-  const strategy = strategies.find((item) => item.id === strategyId);
+async function runBacktest(strategyId) {
+  const strategy = appState.strategies.find((item) => item.id === strategyId);
   if (!strategy) return;
-  const points = Array.from({ length: 32 }, (_, index) => {
-    const wave = Math.sin((index + strategy.name.length) * 0.55) * 9;
-    return 50 + index * (strategy.type === "grid" ? 1.2 : 1.8) + wave;
-  });
-  const first = points[0] || 1;
-  const last = points[points.length - 1] || first;
-  let highWater = first;
-  let maxDrawdown = 0;
-  points.forEach((point) => {
-    highWater = Math.max(highWater, point);
-    const drawdown = highWater > 0 ? ((point - highWater) / highWater) * 100 : 0;
-    maxDrawdown = Math.min(maxDrawdown, drawdown);
-  });
+  const entry = Number(strategy.price || currentMarkPrice(strategy.pair) || 100);
+  const points = simulatedBacktestPath(strategy, entry);
+  const body = {
+    signal: {
+      symbol: strategy.pair,
+      side: strategy.side || "buy",
+      exchange: "paper",
+      market_type: strategy.market_type || "swap",
+      quote_amount: strategy.amount || "100",
+      price: String(entry),
+      stop_loss_pct: strategy.stop || "5",
+      take_profit_pct: strategy.takeProfit || "100",
+      trailing_stop_pct: strategy.trailingStop || null,
+      trailing_activation_pct: strategy.trailingActivation || null,
+      strategy_id: strategy.strategy_id || strategy.name,
+    },
+    prices: points.slice(1).map((point) => String(point)),
+    close_final_positions: true,
+    costs: { fee_bps: "6", slippage_bps: "5" },
+  };
+  const result = await api("/backtest/signal", { method: "POST", body });
+  const metrics = result.report_metrics || {};
   appState.backtests[strategyId] = {
     points,
-    return_pct: ((last - first) / first) * 100,
-    max_drawdown_pct: maxDrawdown,
+    return_pct: Number(metrics.total_return_pct ?? metrics.realized_return_pct ?? 0),
+    max_drawdown_pct: Number(metrics.max_drawdown_pct ?? 0) * -1,
+    win_rate_pct: metrics.win_rate_pct,
+    profit_factor: metrics.profit_factor,
+    gross_profit: metrics.gross_profit,
+    gross_loss: metrics.gross_loss,
+    final_total_pnl: result.final_total_pnl,
     updated_at: new Date().toISOString(),
   };
   writeStoredBacktests(appState.backtests);
   renderStrategies();
-  setStatus(`${strategy.name} backtest: ${percent(appState.backtests[strategyId].return_pct)} return, ${Math.abs(maxDrawdown).toFixed(2)}% drawdown.`, "ok");
+  setStatus(`${strategy.name} backtest: ${percent(appState.backtests[strategyId].return_pct)} return, ${Math.abs(appState.backtests[strategyId].max_drawdown_pct).toFixed(2)}% drawdown.`, "ok");
+}
+
+function simulatedBacktestPath(strategy, entry) {
+  const side = String(strategy.side || "buy").toLowerCase();
+  const drift = strategy.id === "dip_reclaim" ? 0.45 : strategy.id === "range_reversion_short" ? -0.35 : 0.65;
+  return Array.from({ length: 32 }, (_, index) => {
+    const wave = Math.sin((index + strategy.name.length) * 0.55) * entry * 0.012;
+    const trend = entry * (drift / 100) * index;
+    const path = entry + trend + wave;
+    return Number(Math.max(entry * 0.2, path).toFixed(8));
+  }).map((price) => (side === "sell" ? Number((entry - (price - entry)).toFixed(8)) : price));
 }
 
 function toggleStrategyPin(strategyId) {
-  const strategy = strategies.find((item) => item.id === strategyId);
+  const strategy = appState.strategies.find((item) => item.id === strategyId);
   if (!strategy) return;
   const pinned = readPinnedStrategies();
   const pinnedNow = !pinned.has(strategyId);
@@ -1708,9 +1785,9 @@ function drawPnlBars() {
 function drawStrategySparks() {
   $$("[data-strategy-spark]").forEach((canvas) => {
     const id = canvas.dataset.strategySpark;
-    const strategy = strategies.find((item) => item.id === id);
+    const strategy = appState.strategies.find((item) => item.id === id);
     const storedBacktest = appState.backtests[id];
-    const points = storedBacktest?.points || storedBacktest || Array.from({ length: 28 }, (_, index) => 42 + Math.sin((index + strategy.name.length) * 0.62) * 10 + index * 1.4);
+    const points = storedBacktest?.points || storedBacktest || Array.from({ length: 28 }, (_, index) => 42 + Math.sin((index + (strategy?.name || "").length) * 0.62) * 10 + index * 1.4);
     const { ctx, width, height } = setupCanvas(canvas);
     ctx.clearRect(0, 0, width, height);
     linePath(ctx, points, width, height, "#27d9ef", "rgba(39, 217, 239, 0.14)");
@@ -1981,7 +2058,7 @@ function bindEvents() {
       $("#ticketStatus").textContent = "preview failed";
       setStatus(`Strategy load failed: ${error.message}`, "error");
     });
-    if (action === "backtest-strategy") runBacktest(target.dataset.strategyId);
+    if (action === "backtest-strategy") runBacktest(target.dataset.strategyId).catch((error) => setStatus(`Backtest failed: ${error.message}`, "error"));
     if (action === "toggle-strategy-pin") toggleStrategyPin(target.dataset.strategyId);
     if (action === "copy-json") copyText(target.dataset.json).catch((error) => setStatus(error.message, "error"));
   });
