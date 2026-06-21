@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from autocrypto.app import create_app
 from autocrypto.exchanges.ccxt_adapter import ExchangeCapabilities
 from autocrypto.exchanges.order_planner import plan_bracket_execution
+from autocrypto.execution import build_exit_orders
 from autocrypto.signals import normalize_signal
 
 
@@ -59,6 +60,59 @@ def test_order_planner_keeps_paper_bracket_synthetic_and_not_live_safe():
     assert plan.execution_sequence[-1]["exit_side"] == "sell"
     assert plan.execution_sequence[-1]["close_action"] == "sell_to_close_long"
     assert plan.execution_sequence[-1]["live_submission_enabled"] is False
+
+
+def test_order_planner_exit_legs_align_with_execution_exit_orders():
+    signal = normalize_signal(
+        {
+            "signal_id": "planner-execution-alignment",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_targets": [
+                {"pct": "5", "close_pct": "40"},
+                {"pct": "10", "close_pct": "60"},
+            ],
+            "trailing_stop_pct": "4",
+            "trailing_stop_close_pct": "25",
+            "trail_after_take_profit": True,
+            "max_hold_marks": 3,
+        },
+        source="test",
+    )
+    capabilities = ExchangeCapabilities(
+        exchange_id="paper",
+        spot=True,
+        margin=False,
+        swap=False,
+        future=False,
+        option=False,
+        create_order=True,
+        cancel_order=False,
+        fetch_balance=False,
+        attached_stop_loss_take_profit=True,
+        oco_order=True,
+        trailing_order=True,
+        reduce_only=True,
+    )
+
+    exit_orders = build_exit_orders(signal)
+    plan = plan_bracket_execution(signal, capabilities)
+
+    assert [
+        (exit_order.kind, exit_order.trigger_price, exit_order.close_pct, exit_order.status)
+        for exit_order in exit_orders
+    ] == [
+        (exit_leg.role, exit_leg.trigger_price, exit_leg.close_pct, exit_leg.activation_status)
+        for exit_leg in plan.exits
+    ]
+    assert [exit_order.oca_group for exit_order in exit_orders] == [
+        exit_leg.params["oca_group"] for exit_leg in plan.exits
+    ]
+    assert [exit_leg.close_action for exit_leg in plan.exits] == ["sell_to_close_long"] * len(exit_orders)
+    assert plan.live_order_safe is False
 
 
 def test_order_planner_uses_attached_strategy_when_venue_advertises_brackets_and_trailing():

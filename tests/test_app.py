@@ -810,6 +810,45 @@ def test_bracket_preview_reports_trailing_ratchet_impact_without_trigger():
     ]
 
 
+def test_bracket_preview_invariant_does_not_mutate_state_snapshots():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "preview-invariant",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "30",
+            "trailing_stop_pct": "5",
+        },
+    )
+    before_state = client.get("/ui/state").json()
+    before_trailing = next(
+        exit_order for exit_order in before_state["active_exits"] if exit_order["kind"] == "trailing_stop"
+    )
+
+    preview = client.post("/brackets/preview-invariant/preview", json={"price": "110"})
+    after_state = client.get("/ui/state").json()
+    after_trailing = next(
+        exit_order for exit_order in after_state["active_exits"] if exit_order["kind"] == "trailing_stop"
+    )
+
+    assert preview.status_code == 200
+    assert preview.json()["impact"]["mutates_state"] is False
+    assert after_state["orders"] == before_state["orders"]
+    assert after_state["positions"] == before_state["positions"]
+    assert after_state["audit"] == before_state["audit"]
+    assert after_trailing == before_trailing
+    assert next(
+        exit_order for exit_order in preview.json()["preview_active_exits"] if exit_order["kind"] == "trailing_stop"
+    )["trigger_price"] == "104.50"
+
+
 def test_lock_profit_moves_protective_exits_beyond_entry_without_live_execution():
     app = create_app()
     client = TestClient(app)
