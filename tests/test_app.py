@@ -725,6 +725,78 @@ def test_backtest_stress_runs_named_price_and_cost_scenarios():
     assert positions_after.json()["positions"] == []
 
 
+def test_backtest_batch_ranks_ticker_candidates_without_mutating_live_engine():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/backtest/batch",
+        json={
+            "signal": {
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "10",
+            },
+            "costs": {"fee_bps": "10", "slippage_bps": "0"},
+            "close_final_positions": True,
+            "candidates": [
+                {"name": "btc-target", "symbol": "BTCUSDT", "prices": ["110"]},
+                {"name": "eth-stop", "symbol": "ETHUSDT", "candles": [{"high": "101", "low": "94", "close": "96"}]},
+                {"name": "sol-open", "symbol": "SOLUSDT", "prices": ["103"], "close_final_positions": False},
+            ],
+        },
+    )
+    positions_after = client.get("/positions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["candidate_count"] == 3
+    assert body["accepted_count"] == 3
+    assert body["rejected_count"] == 0
+    assert body["best_by_total_pnl"]["name"] == "btc-target"
+    assert body["worst_by_total_pnl"]["name"] == "eth-stop"
+    assert [row["name"] for row in body["ranked"]] == ["btc-target", "sol-open", "eth-stop"]
+    assert body["ranked"][0]["symbol"] == "BTC/USDT"
+    assert body["ranked"][0]["total_return_pct"] == "9.7900"
+    assert body["worst_max_drawdown"] == "6.19"
+    assert body["results"][2]["final_open_notional"] == "100"
+    assert positions_after.json()["positions"] == []
+
+
+def test_backtest_batch_can_continue_after_invalid_candidate():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/backtest/batch",
+        json={
+            "continue_on_error": True,
+            "signal": {
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "10",
+            },
+            "candidates": [
+                {"name": "missing-path", "symbol": "BTCUSDT"},
+                {"name": "eth-target", "symbol": "ETHUSDT", "prices": ["110"]},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["candidate_count"] == 2
+    assert body["accepted_count"] == 1
+    assert body["rejected_count"] == 1
+    assert body["results"][0]["status"] == "invalid"
+    assert body["results"][0]["error"] == "candidate prices or candles must be a non-empty list"
+    assert body["ranked"][0]["name"] == "eth-target"
+
+
 def test_symbol_concentration_cap_uses_current_paper_position():
     app = create_app(risk_config=RiskConfig(max_order_notional=1000, max_symbol_open_notional=150))
     client = TestClient(app)

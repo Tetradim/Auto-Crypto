@@ -1413,6 +1413,77 @@ def create_app(
         }
         return summary
 
+    @app.post("/backtest/batch")
+    async def backtest_batch(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        candidates_payload = payload.get("candidates")
+        base_signal = payload.get("signal") if isinstance(payload.get("signal"), dict) else {}
+        if not isinstance(candidates_payload, list) or not candidates_payload:
+            raise HTTPException(status_code=400, detail="candidates must be a non-empty list")
+        if len(candidates_payload) > 50:
+            raise HTTPException(status_code=400, detail="candidates cannot exceed 50")
+
+        results: list[dict[str, Any]] = []
+        for index, candidate_payload in enumerate(candidates_payload, start=1):
+            if not isinstance(candidate_payload, dict):
+                raise HTTPException(status_code=400, detail="candidate entries must be objects")
+            try:
+                candidate = _batch_backtest_candidate_payload(
+                    candidate_payload,
+                    base_signal=base_signal,
+                    default_name=f"candidate-{index}",
+                    default_payload=payload,
+                )
+                signal = normalize_signal(candidate["signal"], source="operator-batch-backtest")
+                summary = _run_backtest_candidate(
+                    engine,
+                    signal,
+                    candidate,
+                ).to_dict()
+            except (SignalValidationError, ValueError) as exc:
+                if not _truthy(payload.get("continue_on_error")):
+                    raise HTTPException(status_code=400, detail=f"{candidate_payload.get('name') or index}: {exc}") from exc
+                results.append(
+                    {
+                        "name": str(candidate_payload.get("name") or candidate_payload.get("label") or f"candidate-{index}"),
+                        "accepted": False,
+                        "status": "invalid",
+                        "error": str(exc),
+                    }
+                )
+                continue
+            result = {
+                "name": candidate["name"],
+                "symbol": signal.symbol,
+                **summary,
+            }
+            results.append(result)
+
+        accepted = [result for result in results if result.get("accepted")]
+        ranked = sorted(
+            accepted,
+            key=lambda result: (
+                _decimal(result.get("final_total_pnl"), default=Decimal("0")),
+                -_decimal(result.get("risk_summary", {}).get("max_drawdown"), default=Decimal("0")),
+            ),
+            reverse=True,
+        )
+        return {
+            "candidate_count": len(results),
+            "accepted_count": len(accepted),
+            "rejected_count": len(results) - len(accepted),
+            "best_by_total_pnl": _batch_result_rank_row(ranked[0]) if ranked else None,
+            "worst_by_total_pnl": _batch_result_rank_row(ranked[-1]) if ranked else None,
+            "worst_max_drawdown": str(
+                max(
+                    (_decimal(result.get("risk_summary", {}).get("max_drawdown"), default=Decimal("0")) for result in accepted),
+                    default=Decimal("0"),
+                )
+            ),
+            "ranked": [_batch_result_rank_row(result) for result in ranked],
+            "results": results,
+        }
+
     @app.post("/backtest/stress")
     async def backtest_stress(request: Request) -> dict[str, Any]:
         payload = await request.json()
@@ -1537,6 +1608,98 @@ def _stress_scenario_payload(value: Any) -> dict[str, Any]:
                 default=Decimal("0"),
             ),
         ),
+    }
+
+
+def _batch_backtest_candidate_payload(
+    value: dict[str, Any],
+    *,
+    base_signal: dict[str, Any],
+    default_name: str,
+    default_payload: dict[str, Any],
+) -> dict[str, Any]:
+    candidate_signal = value.get("signal") if isinstance(value.get("signal"), dict) else {}
+    inline_signal = {
+        key: item
+        for key, item in value.items()
+        if key
+        not in {
+            "name",
+            "label",
+            "signal",
+            "prices",
+            "marks",
+            "candles",
+            "costs",
+            "close_final_positions",
+            "force_close_final",
+        }
+    }
+    signal_payload = {**base_signal, **inline_signal, **candidate_signal}
+    if not signal_payload.get("symbol") and value.get("symbol"):
+        signal_payload["symbol"] = value["symbol"]
+
+    marks_payload = value.get("prices") or value.get("marks") or []
+    candles_payload = value.get("candles") or []
+    if candles_payload and marks_payload:
+        raise ValueError("candidate must send either prices or candles, not both")
+    if candles_payload:
+        if not isinstance(candles_payload, list):
+            raise ValueError("candidate candles must be a list")
+        path = {"candles": [_candle_payload(candle) for candle in candles_payload]}
+    else:
+        if not isinstance(marks_payload, list) or not marks_payload:
+            raise ValueError("candidate prices or candles must be a non-empty list")
+        path = {"prices": [_positive_decimal(price) for price in marks_payload]}
+
+    cost_payload = {**default_payload, **value}
+    return {
+        "name": str(value.get("name") or value.get("label") or signal_payload.get("symbol") or default_name),
+        "signal": signal_payload,
+        **path,
+        "close_final_positions": _truthy(
+            value.get("close_final_positions")
+            if "close_final_positions" in value
+            else value.get("force_close_final")
+            if "force_close_final" in value
+            else default_payload.get("close_final_positions") or default_payload.get("force_close_final")
+        ),
+        "costs": _execution_cost_payload(cost_payload),
+    }
+
+
+def _run_backtest_candidate(engine: TradingEngine, signal: CryptoSignal, candidate: dict[str, Any]) -> Any:
+    if "candles" in candidate:
+        return run_signal_candle_backtest(
+            engine,
+            signal,
+            candidate["candles"],
+            costs=candidate["costs"],
+            close_final_positions=candidate["close_final_positions"],
+        )
+    return run_signal_backtest(
+        engine,
+        signal,
+        candidate["prices"],
+        costs=candidate["costs"],
+        close_final_positions=candidate["close_final_positions"],
+    )
+
+
+def _batch_result_rank_row(result: dict[str, Any]) -> dict[str, Any]:
+    metrics = result.get("report_metrics", {})
+    risk = result.get("risk_summary", {})
+    return {
+        "name": result.get("name"),
+        "symbol": result.get("symbol"),
+        "status": result.get("status"),
+        "final_total_pnl": result.get("final_total_pnl"),
+        "final_daily_pnl": result.get("final_daily_pnl"),
+        "total_return_pct": metrics.get("total_return_pct"),
+        "win_rate_pct": metrics.get("win_rate_pct"),
+        "profit_factor": metrics.get("profit_factor"),
+        "max_drawdown": risk.get("max_drawdown"),
+        "total_triggers": result.get("total_triggers"),
     }
 
 

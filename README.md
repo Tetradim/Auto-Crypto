@@ -619,6 +619,7 @@ Current bot work is guided by paper-first risk controls and exchange order behav
 - The same risk guidance emphasizes portfolio-level drawdown limits alongside per-trade stops, so Auto-Crypto now offers aggregate paper bracket-risk caps with `AUTO_CRYPTO_MAX_OPEN_RISK_AMOUNT` and `AUTO_CRYPTO_MAX_OPEN_RISK_EQUITY_PCT` before any additional bracket entry is accepted: <https://cryptorobot.ai/blog/essential-tips-managing-risks-crypto-trading-bots>
 - Current bot risk guidance emphasizes position controls, daily loss limits, and kill switches; Auto-Crypto now adds a per-symbol paper concentration cap through `AUTO_CRYPTO_MAX_SYMBOL_OPEN_NOTIONAL` before any live exchange path is considered: <https://blog.traderspost.io/article/best-automated-trading-bots-2025>
 - Current automated trading guidance recommends volatility-aware sizing and portfolio-level stress tests rather than fixed trade sizes alone; Auto-Crypto can reject signals carrying high `volatility_pct` or `atr_pct` and can replay multiple stress scenarios through `/backtest/stress`: <https://www.tradingbotexperts.com/blog/best-automated-trading-platforms>
+- Current backtesting and launch guidance recommends comparing out-of-sample behavior, drawdowns, costs, and forward-test candidates before trusting a strategy; Auto-Crypto's `/backtest/batch` endpoint keeps that screening paper-only across BTC/ETH/SOL/alt candidates and returns a ranked list instead of promoting one clean chart as a live signal: <https://blog.quantinsti.com/walk-forward-optimization-introduction/> and <https://blog.traderspost.io/article/how-to-backtest-trading-strategies>
 - Current crypto backtesting guidance emphasizes testing strategies on historical or simulated price paths before launch; Auto-Crypto's `/backtest/signal` endpoint applies that idea to bracket and trailing-stop paper logic without mutating active state: <https://bitsgap.com/blog/crypto-backtesting-guide-2025-tools-tips-and-how-bitsgap-helps>
 - Current crypto-bot backtesting guidance warns that clean historical fills can hide slippage, fees, latency, and stressed-market liquidity; Auto-Crypto's backtest-only `fee_bps` and `slippage_bps` inputs make those assumptions explicit while keeping live execution disabled: <https://bitsgap.com/blog/crypto-bot-backtesting-in-2026-what-it-shows-and-what-it-cannot-predict>
 - Perpetual futures strategies also need funding assumptions in paper tests; Bitunix's futures API exposes current contract funding data and its 2026 explainer describes positive funding as paid by longs and received by shorts, so Auto-Crypto exposes backtest-only `funding_rate_bps` and `funding_periods_per_mark` beside fee and slippage assumptions instead of treating perp marks as spot-only price paths: <https://www.bitunix.com/api-docs/futures/market/get_funding_rate.html>, <https://www.bitunix.com/hub/helpcenter/article/introduction-to-futures-funding-rate?id=79>
@@ -765,6 +766,7 @@ Signal intake:
 - `POST /signals/submit`
 - `POST /backtest/signal`
 - `POST /backtest/bitunix-klines`
+- `POST /backtest/batch`
 - `POST /backtest/stress`
 
 Paper market updates:
@@ -861,6 +863,27 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/backtest/bitunix-kline
   "limit": 100,
   "price_type": "LAST_PRICE",
   "close_final_positions": true
+}'
+```
+
+`POST /backtest/batch` runs the same isolated paper backtest shape across a `candidates` list so operators can compare BTC, ETH, SOL, and altcoin setups before deciding what deserves deeper walk-forward work. A top-level `signal` acts as the base strategy, while each candidate can override `symbol`, `price`, sizing, exit fields, `prices` or `candles`, `costs`, and `close_final_positions`. The response includes full per-candidate summaries plus a compact `ranked` list, best/worst total P&L rows, accepted/rejected counts, and worst max drawdown. It does not save orders, fetch exchange data, or mutate live paper state.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/backtest/batch -ContentType "application/json" -Body '{
+  "signal": {
+    "side": "buy",
+    "quote_amount": "100",
+    "price": "100",
+    "stop_loss_pct": "5",
+    "take_profit_pct": "10"
+  },
+  "costs": {"fee_bps": "10", "slippage_bps": "20"},
+  "close_final_positions": true,
+  "candidates": [
+    {"name": "btc-breakout", "symbol": "BTCUSDT", "prices": ["104", "110"]},
+    {"name": "eth-adverse-candle", "symbol": "ETHUSDT", "candles": [{"high": "101", "low": "94", "close": "96"}]},
+    {"name": "sol-open-runner", "symbol": "SOLUSDT", "prices": ["103"], "close_final_positions": false}
+  ]
 }'
 ```
 
