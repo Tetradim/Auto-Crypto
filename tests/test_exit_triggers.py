@@ -377,6 +377,62 @@ def test_trailing_stop_ratcheted_up_then_triggers_on_pullback():
     assert exchange.list_positions()[0]["realized_pnl"] == "4.50000000"
 
 
+def test_long_gap_through_stop_and_trailing_uses_nearest_trailing_exit():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "long-gap-through-trail",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "take_profit_pct": "30",
+            "trailing_stop_pct": "5",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+    exchange.update_price("BTC/USDT", Decimal("120"))
+
+    triggered = exchange.update_price("BTC/USDT", Decimal("90"))
+
+    assert triggered == [
+        {"symbol": "BTC/USDT", "kind": "trailing_stop", "price": "90.00000000", "quantity": "1.00000000"}
+    ]
+    assert exchange.orders[-1].exit_orders[0].trigger_price == Decimal("114.00")
+    assert exchange.orders[-1].canceled_exit_orders
+
+
+def test_short_gap_through_stop_and_trailing_uses_nearest_trailing_exit():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "short-gap-through-trail",
+            "symbol": "ETH/USDT",
+            "side": "short",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "take_profit_pct": "30",
+            "trailing_stop_pct": "5",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+    exchange.update_price("ETH/USDT", Decimal("80"))
+
+    triggered = exchange.update_price("ETH/USDT", Decimal("110"))
+
+    assert triggered == [
+        {"symbol": "ETH/USDT", "kind": "trailing_stop", "price": "110.00000000", "quantity": "1.00000000"}
+    ]
+    assert exchange.orders[-1].exit_orders[0].trigger_price == Decimal("84.00")
+    assert exchange.orders[-1].canceled_exit_orders
+
+
 def test_partial_trailing_stop_reduces_long_lot_and_keeps_other_exits():
     exchange = PaperExchange()
     engine = TradingEngine(exchange=exchange)

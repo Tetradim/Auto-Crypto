@@ -34,6 +34,7 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Supports partial paper trailing-stop reductions with `trailing_stop_close_pct`, leaving the remaining simulated lot under its other bracket exits
 - Supports paper trailing-step controls so trailing stops only ratchet after a minimum trigger improvement instead of every favorable tick
 - Supports optional paper trailing-after-take-profit controls so a trailing stop can stay dormant until the first staged or full take-profit target fills
+- When a fast paper mark gaps through both a fixed stop and a ratcheted trailing stop, closes on the nearest crossed protective leg first and reports that leg's trigger gap when order metadata is requested
 - Requires a fixed stop-loss by default when a trailing stop starts pending activation or pending take-profit, so initial paper risk is defined before the trail can arm
 - Supports optional paper breakeven-after-take-profit and profit-lock-after-take-profit brackets so the remaining stop/trailing legs lock at entry or a configured profit percentage after a staged target fills
 - Supports paper time-stop exits with `max_hold_marks`/`time_stop_marks` so a bracket can close after a fixed number of market-price marks when no price exit fired
@@ -192,6 +193,14 @@ python scripts/operator_ui_smoke.py
 4. In paper mode, the bot records an accepted order and updates the paper portfolio.
 5. Price updates can trigger paper stop-loss, take-profit, or trailing-stop exits. Long bracket exits sell; short bracket exits buy back paper quantity.
 6. Signals, orders, positions, approvals, and audit events are stored in SQLite when `AUTO_CRYPTO_DB_PATH` is set.
+
+## Trading-Bot Practice Notes
+
+- Bracket/OCO exits are modeled as protective reduce-only close logic: a long bracket exits with sell stops/targets, and a short bracket exits with buy-to-cover stops/targets. This matches common bracket-order descriptions from Schwab and Coinbase, while staying synthetic and paper-only here until an operator approves a future venue adapter path.
+- Gap-through behavior is intentionally explicit. Bracket and OCO orders can manage risk, but they cannot guarantee fills at the trigger when price gaps past a stop; Auto-Crypto reports `trigger_gap` in paper metadata so operators can see the simulated overshoot instead of assuming a clean stop fill.
+- Backtests and previews should be treated as conservative approximations. Current crypto-bot guidance emphasizes modeling fees, slippage, latency, and forward/demo testing before risking capital, so Auto-Crypto keeps fee/slippage assumptions visible and keeps live trading disabled by default.
+
+Sources: Schwab on bracket orders (<https://www.schwab.com/learn/story/how-to-use-advanced-stock-order-types>), Coinbase on reduce-only TP/SL bracket orders (<https://help.coinbase.com/coinbase/derivatives/bracket-orders>), Optimus Futures on gap risk in OCO/bracket orders (<https://learn.optimusfutures.com/oco-bracket-orders>), Paybis on realistic crypto-bot backtesting costs (<https://paybis.com/blog/how-to-backtest-crypto-bot/>), Bitsgap on 2026 crypto-bot settings and demo/backtesting (<https://bitsgap.com/blog/how-to-choose-crypto-trading-bot-settings-in-2026-range-investment-stop-loss-and-take-profit>).
 
 ## Send A Test Crypto Alert
 

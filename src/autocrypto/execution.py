@@ -1159,26 +1159,12 @@ class PaperExchange:
         self._refresh_active_exits(order.symbol)
 
     def _triggered_exit(self, lot: PaperLot, price: Decimal) -> ExitOrder | None:
+        protective_exit = _triggered_protective_exit(lot, price)
+        if protective_exit is not None:
+            return protective_exit
         for exit_order in lot.exit_orders:
-            if lot.direction == "long" and exit_order.kind == "stop_loss" and price <= exit_order.trigger_price:
-                return exit_order
-            if lot.direction == "short" and exit_order.kind == "stop_loss" and price >= exit_order.trigger_price:
-                return exit_order
-            if (
-                lot.direction == "long"
-                and exit_order.kind == "trailing_stop"
-                and lot.trailing_activated
-                and price <= exit_order.trigger_price
-            ):
-                return exit_order
-            if (
-                lot.direction == "short"
-                and exit_order.kind == "trailing_stop"
-                and lot.trailing_activated
-                and price >= exit_order.trigger_price
-            ):
-                return exit_order
-        for exit_order in lot.exit_orders:
+            if exit_order.status != "open":
+                continue
             if lot.direction == "long" and exit_order.kind == "take_profit" and price >= exit_order.trigger_price:
                 return exit_order
             if lot.direction == "short" and exit_order.kind == "take_profit" and price <= exit_order.trigger_price:
@@ -1572,6 +1558,36 @@ def build_exit_orders(signal: CryptoSignal) -> list[ExitOrder]:
             )
         )
     return exits
+
+
+def _triggered_protective_exit(lot: PaperLot, price: Decimal) -> ExitOrder | None:
+    crossed: list[ExitOrder] = []
+    for exit_order in lot.exit_orders:
+        if exit_order.status != "open":
+            continue
+        if lot.direction == "long" and exit_order.kind == "stop_loss" and price <= exit_order.trigger_price:
+            crossed.append(exit_order)
+        if lot.direction == "short" and exit_order.kind == "stop_loss" and price >= exit_order.trigger_price:
+            crossed.append(exit_order)
+        if (
+            lot.direction == "long"
+            and exit_order.kind == "trailing_stop"
+            and lot.trailing_activated
+            and price <= exit_order.trigger_price
+        ):
+            crossed.append(exit_order)
+        if (
+            lot.direction == "short"
+            and exit_order.kind == "trailing_stop"
+            and lot.trailing_activated
+            and price >= exit_order.trigger_price
+        ):
+            crossed.append(exit_order)
+    if not crossed:
+        return None
+    if lot.direction == "long":
+        return max(crossed, key=lambda exit_order: exit_order.trigger_price)
+    return min(crossed, key=lambda exit_order: exit_order.trigger_price)
 
 
 def _has_exit_plan(signal: CryptoSignal) -> bool:

@@ -149,6 +149,38 @@ def test_market_price_metadata_reports_trigger_gap_for_price_overshoot(tmp_path)
     assert triggered["trigger_gap"] == "3.00000000"
 
 
+def test_market_price_metadata_prefers_nearest_trailing_stop_on_gap_through(tmp_path):
+    repo = SQLiteRepository(tmp_path / "trailing_gap.sqlite3")
+    app = create_app(repository=repo)
+    client = TestClient(app)
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "gap-through-trailer",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "take_profit_pct": "30",
+            "trailing_stop_pct": "5",
+        },
+    )
+    client.post("/market/price", json={"symbol": "BTCUSDT", "price": "120"})
+
+    response = client.post(
+        "/market/price",
+        json={"symbol": "BTCUSDT", "price": "90", "include_order_metadata": True},
+    )
+
+    assert response.status_code == 200
+    triggered = response.json()["triggered"][0]
+    assert triggered["kind"] == "trailing_stop"
+    assert triggered["trigger_price"] == "114.00"
+    assert triggered["trigger_gap"] == "24.00000000"
+    assert [order["kind"] for order in triggered["canceled_exit_orders"]] == ["stop_loss", "take_profit"]
+
+
 def test_market_price_exit_reduces_open_notional_for_future_risk(tmp_path):
     repo = SQLiteRepository(tmp_path / "market_risk.sqlite3")
     app = create_app(
