@@ -26,6 +26,7 @@ from .brackets import (
     trailing_activation_price,
     trailing_ratchet_impacts,
 )
+from .bracket_templates import apply_bracket_template, get_bracket_template, list_bracket_templates
 from .bot_event_bus import BotEvent, event_bus
 from .config import load_settings
 from .edge_actions import apply_edge_action
@@ -1164,6 +1165,26 @@ def create_app(
     def signals() -> dict[str, Any]:
         return {"signals": repository.list_signals() if repository else []}
 
+    @app.get("/bracket-templates")
+    def bracket_templates() -> dict[str, Any]:
+        return {
+            "templates": list_bracket_templates(),
+            "paper_only": True,
+            "live_submission_enabled": False,
+        }
+
+    @app.get("/bracket-templates/{template_name}")
+    def bracket_template(template_name: str) -> dict[str, Any]:
+        try:
+            template = get_bracket_template(template_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "template": template.to_dict(),
+            "paper_only": True,
+            "live_submission_enabled": False,
+        }
+
     @app.post("/signals/parse-text")
     async def parse_text(request: Request) -> dict[str, Any]:
         payload = await request.json()
@@ -1208,6 +1229,37 @@ def create_app(
         except SignalValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _signal_preview(signal, engine, require_approval=require_approval)
+
+    @app.post("/signals/preview-template")
+    async def preview_template_signal(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            templated_payload = _templated_signal_payload(payload)
+            signal = normalize_signal(templated_payload, source="operator-template-preview")
+        except SignalValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        preview = _signal_preview(signal, engine, require_approval=require_approval)
+        preview["template"] = get_bracket_template(str(templated_payload["bracket_template"])).to_dict()
+        preview["merged_signal_payload"] = templated_payload
+        preview["paper_only"] = True
+        return preview
+
+    @app.post("/signals/submit-template")
+    async def submit_template_signal(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            templated_payload = _templated_signal_payload(payload)
+            signal = normalize_signal(templated_payload, source="operator-template")
+        except SignalValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        result = intake.handle(signal)
+        result["template"] = get_bracket_template(str(templated_payload["bracket_template"])).to_dict()
+        result["paper_only"] = True
+        return result
 
     @app.post("/signals/exchange-plan")
     async def signal_exchange_plan(request: Request) -> dict[str, Any]:
@@ -1400,6 +1452,23 @@ def _paper_capabilities() -> ExchangeCapabilities:
         trailing_order=True,
         reduce_only=True,
     )
+
+
+def _templated_signal_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object")
+    template_name = str(payload.get("template") or payload.get("template_name") or "").strip()
+    if not template_name:
+        raise ValueError("template is required")
+    signal_payload = payload.get("signal")
+    if signal_payload is None:
+        signal_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"template", "template_name", "overrides", "template_overrides"}
+        }
+    overrides = payload.get("overrides") or payload.get("template_overrides")
+    return apply_bracket_template(signal_payload, template_name, overrides=overrides)
 
 
 def _capabilities_for_signal_exchange(exchange_id: str) -> ExchangeCapabilities:
