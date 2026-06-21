@@ -35,6 +35,7 @@ from .exchanges.bitunix_adapter import (
     BitunixConfigurationError,
     BitunixRequestError,
     BitunixRestClient,
+    bitunix_kline_candles,
     bitunix_credentials_configured,
     bitunix_live_execution_enabled,
     load_bitunix_credentials_from_env,
@@ -306,6 +307,28 @@ def create_app(
     def bitunix_futures_tickers(symbols: str | None = None) -> dict[str, Any]:
         try:
             return BitunixRestClient(credentials=load_bitunix_credentials_from_env()).get_futures_tickers(symbols)
+        except BitunixRequestError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/exchanges/bitunix/futures/klines")
+    def bitunix_futures_klines(
+        symbol: str,
+        interval: str,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int | None = None,
+        price_type: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            payload = BitunixRestClient(credentials=load_bitunix_credentials_from_env()).get_futures_klines(
+                symbol,
+                interval,
+                start_time=start_time,
+                end_time=end_time,
+                limit=limit,
+                price_type=price_type,
+            )
+            return {"source": "bitunix", "raw": payload, "candles": bitunix_kline_candles(payload)}
         except BitunixRequestError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1294,13 +1317,58 @@ def create_app(
         try:
             signal = normalize_signal(signal_payload, source="operator-backtest")
             costs = _execution_cost_payload(payload)
+            close_final_positions = _truthy(payload.get("close_final_positions") or payload.get("force_close_final"))
             if candles_payload:
                 candles = [_candle_payload(candle) for candle in candles_payload]
-                return run_signal_candle_backtest(engine, signal, candles, costs=costs).to_dict()
+                return run_signal_candle_backtest(
+                    engine,
+                    signal,
+                    candles,
+                    costs=costs,
+                    close_final_positions=close_final_positions,
+                ).to_dict()
             prices = [_positive_decimal(price) for price in marks_payload]
         except (SignalValidationError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return run_signal_backtest(engine, signal, prices, costs=costs).to_dict()
+        return run_signal_backtest(
+            engine,
+            signal,
+            prices,
+            costs=costs,
+            close_final_positions=close_final_positions,
+        ).to_dict()
+
+    @app.post("/backtest/bitunix-klines")
+    async def backtest_bitunix_klines(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        signal_payload = payload.get("signal") if isinstance(payload.get("signal"), dict) else payload
+        try:
+            signal = normalize_signal(signal_payload, source="operator-bitunix-kline-backtest")
+            costs = _execution_cost_payload(payload)
+            query = _bitunix_kline_query(payload)
+            raw = BitunixRestClient(credentials=load_bitunix_credentials_from_env()).get_futures_klines(**query)
+            candles = [_candle_payload(candle) for candle in bitunix_kline_candles(raw)]
+            if not candles:
+                raise ValueError("Bitunix returned no candles")
+        except (SignalValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except BitunixRequestError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        summary = run_signal_candle_backtest(
+            engine,
+            signal,
+            candles,
+            costs=costs,
+            close_final_positions=_truthy(payload.get("close_final_positions") or payload.get("force_close_final")),
+        ).to_dict()
+        summary["market_data"] = {
+            "source": "bitunix",
+            "symbol": query["symbol"],
+            "interval": query["interval"],
+            "price_type": query.get("price_type"),
+            "candle_count": len(candles),
+        }
+        return summary
 
     @app.post("/backtest/stress")
     async def backtest_stress(request: Request) -> dict[str, Any]:
@@ -1416,6 +1484,7 @@ def _stress_scenario_payload(value: Any) -> dict[str, Any]:
     return {
         "name": str(value.get("name") or value.get("label") or "scenario"),
         **path,
+        "close_final_positions": _truthy(value.get("close_final_positions") or value.get("force_close_final")),
         "costs": ExecutionCostConfig(
             fee_bps=_non_negative_decimal(costs_payload.get("fee_bps"), default=Decimal("0")),
             slippage_bps=_non_negative_decimal(costs_payload.get("slippage_bps"), default=Decimal("0")),
@@ -1431,6 +1500,40 @@ def _execution_cost_payload(payload: dict[str, Any]) -> ExecutionCostConfig:
         fee_bps=_non_negative_decimal(fee_bps, default=Decimal("0")),
         slippage_bps=_non_negative_decimal(slippage_bps, default=Decimal("0")),
     )
+
+
+def _bitunix_kline_query(payload: dict[str, Any]) -> dict[str, Any]:
+    market_data = payload.get("market_data") if isinstance(payload.get("market_data"), dict) else {}
+    symbol = str(payload.get("symbol") or market_data.get("symbol") or "").strip().upper()
+    if not symbol:
+        signal = payload.get("signal") if isinstance(payload.get("signal"), dict) else {}
+        symbol = str(signal.get("symbol") or "").strip().upper().replace("/", "")
+    interval = str(payload.get("interval") or market_data.get("interval") or "").strip()
+    if not symbol:
+        raise ValueError("Bitunix kline symbol is required")
+    if not interval:
+        raise ValueError("Bitunix kline interval is required")
+    limit = payload.get("limit") if payload.get("limit") is not None else market_data.get("limit")
+    query: dict[str, Any] = {
+        "symbol": symbol,
+        "interval": interval,
+        "start_time": _optional_int(payload.get("start_time") or market_data.get("start_time")),
+        "end_time": _optional_int(payload.get("end_time") or market_data.get("end_time")),
+        "limit": _optional_int(limit),
+        "price_type": payload.get("price_type") or market_data.get("price_type") or payload.get("type"),
+    }
+    if query["limit"] is not None and (query["limit"] <= 0 or query["limit"] > 200):
+        raise ValueError("Bitunix kline limit must be between 1 and 200")
+    return query
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid integer: {value}") from exc
 
 
 def _non_negative_decimal(value: Any, *, default: Decimal) -> Decimal:

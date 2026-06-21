@@ -493,6 +493,132 @@ def test_backtest_candles_use_conservative_adverse_first_path_and_report_excursi
     assert positions_after.json()["positions"] == []
 
 
+def test_backtest_reports_final_mark_to_market_for_open_position():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/backtest/signal",
+        json={
+            "signal": {
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "20",
+            },
+            "prices": ["105"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_triggers"] == 0
+    assert body["final_mark_price"] == "105"
+    assert body["final_daily_pnl"] == "0"
+    assert body["final_unrealized_pnl"] == "5"
+    assert body["final_total_pnl"] == "5"
+    assert body["final_open_notional"] == "100"
+    assert body["final_close_requested"] is False
+
+
+def test_backtest_can_force_close_open_position_at_final_mark():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/backtest/signal",
+        json={
+            "signal": {
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "20",
+            },
+            "prices": ["105"],
+            "close_final_positions": True,
+        },
+    )
+    positions_after = client.get("/positions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_triggers"] == 1
+    assert body["final_daily_pnl"] == "5"
+    assert body["final_unrealized_pnl"] == "0"
+    assert body["final_total_pnl"] == "5"
+    assert body["final_open_notional"] == "0"
+    assert body["final_close_requested"] is True
+    assert body["final_close_triggers"] == [
+        {
+            "symbol": "BTC/USDT",
+            "kind": "final_close",
+            "price": "105",
+            "quantity": "1",
+            "realized_pnl_delta": "5",
+        }
+    ]
+    assert positions_after.json()["positions"] == []
+
+
+def test_bitunix_kline_backtest_uses_native_candles_without_mutating_live_engine(monkeypatch):
+    class FakeBitunixClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def get_futures_klines(self, **kwargs):
+            assert kwargs["symbol"] == "BTCUSDT"
+            assert kwargs["interval"] == "15m"
+            assert kwargs["limit"] == 2
+            return {
+                "code": 0,
+                "data": [
+                    {"time": 111111, "open": "100", "high": "104", "low": "99", "close": "103"},
+                    {"time": 222222, "open": "103", "high": "112", "low": "102", "close": "111"},
+                ],
+                "msg": "Success",
+            }
+
+    monkeypatch.setattr("autocrypto.app.BitunixRestClient", FakeBitunixClient)
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.post(
+        "/backtest/bitunix-klines",
+        json={
+            "signal": {
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "10",
+            },
+            "symbol": "BTCUSDT",
+            "interval": "15m",
+            "limit": 2,
+        },
+    )
+    positions_after = client.get("/positions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["market_data"] == {
+        "source": "bitunix",
+        "symbol": "BTCUSDT",
+        "interval": "15m",
+        "price_type": None,
+        "candle_count": 2,
+    }
+    assert body["marks"][0]["label"] == "111111"
+    assert body["total_triggers"] == 1
+    assert body["final_daily_pnl"] == "12"
+    assert positions_after.json()["positions"] == []
+
+
 def test_backtest_stress_runs_named_price_and_cost_scenarios():
     app = create_app()
     client = TestClient(app)

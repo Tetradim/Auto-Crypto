@@ -54,6 +54,8 @@ Live trading is intentionally disabled by default. Use exchange API keys with tr
 - Backtests one signal against a supplied paper mark-price path and returns active exit snapshots after each mark without mutating the live in-memory engine
 - Backtests one signal against OHLC candles with conservative adverse-first intrabar sequencing, plus MFE/MAE excursion metrics, without mutating active state
 - Backtests can opt into paper fee and slippage assumptions and report closed-P&L drawdown/runup so bracket/trailing-stop results are not limited to clean mark-price fills
+- Backtests can report final mark-to-market unrealized P&L for open paper lots, or optionally force-close remaining simulated bracket quantity at the final mark
+- Fetches Bitunix futures klines through the native market-data adapter and can run isolated paper backtests directly from those candles
 - Shows persisted signal history with one-click reload into the Trading Desk
 - Supports quote-notional and base-quantity ticket sizing, paper position close controls, bracket lot context, bracket previews, stop tightening, breakeven locks, bracket cancellation, trigger tests, and local unrealized P&L marks in the operator UI
 - Adds operator-facing snapshot cards, a trading-desk preflight checklist, and bracket status/distance columns so paper queues, exposure, positions, and synthetic exits are easier to triage from the UI
@@ -628,6 +630,7 @@ Current bot work is guided by paper-first risk controls and exchange order behav
 - Current CCXT docs describe trailing orders by percentage or quote amount and as exchange-dependent with optional `reduceOnly`, while current crypto-bot risk guidance recommends pairing trailing logic with fixed initial stops; Auto-Crypto therefore lets strict text alerts express fixed trail amounts, exact trail/activation prices, and partial paper trailing closes while keeping execution synthetic and risk-gated: <https://docs.ccxt.com/docs/faq> and <https://cryptorobot.ai/blog/essential-tips-managing-risks-crypto-trading-bots>
 - Current order-type guidance treats bracket/OCO exits as linked conditional orders, and current trading API guidance keeps bracket and trailing orders as venue-specific order families rather than one universal shape; Auto-Crypto therefore inventories reused synthetic OCA groups and flags cross-bracket reuse before any operator treats paper buy/sell bracket logic as portable live execution: <https://bitsgap.com/blog/the-only-guide-to-order-types-youll-ever-need> and <https://alpaca.markets/learn/how-to-build-stock-trading-bot-with-alpaca>
 - CCXT's current FAQ notes that attached TP/SL and trailing support are exchange-specific, while Binance documents trailing stops as contingent orders that can cancel an OCO sibling when triggered; Auto-Crypto accepts several webhook bracket-leg shapes but normalizes them into one synthetic paper model with explicit partial-close caps before any venue adapter is allowed to submit live orders: <https://docs.ccxt.com/docs/faq> and <https://developers.binance.com/docs/binance-spot-api-docs/faqs/trailing-stop-faq>
+- Bitunix's official futures market-data docs expose `GET /api/v1/futures/market/kline` with `symbol`, `interval`, optional time bounds, `limit` capped at `200`, and price type selection; Auto-Crypto uses that public kline response only as an isolated paper backtest input, not as a live execution trigger: <https://www.bitunix.com/api-docs/futures/market/get_kline.html>
 
 ## Environment Variables
 
@@ -733,6 +736,7 @@ Signal intake:
 - `POST /signals/submit-text`
 - `POST /signals/submit`
 - `POST /backtest/signal`
+- `POST /backtest/bitunix-klines`
 - `POST /backtest/stress`
 
 Paper market updates:
@@ -761,7 +765,7 @@ Paper market updates:
 
 `POST /signals/preview` and `POST /signals/preview-text` return a `bracket_plan` object with the synthetic entry side, exit side, OCA group, trailing arming state, trailing activation price, stop/take-profit/trailing triggers, estimated notional and quantity, worst-case stop loss, equity risk percent, first-target reward/risk, and weighted total staged target reward/risk that would apply if the signal were submitted. The preview echoes both percentage and fixed-amount trail fields in the normalized signal payload.
 
-`POST /backtest/signal` accepts a `signal` object plus a `prices` list, runs the signal through an isolated paper engine, marks each supplied price, and returns triggered exits, active exit snapshots after each mark, final paper P&L, final open notional, final positions, closed-P&L drawdown/runup, and the applied cost assumptions. It does not save orders, write audit events, or mutate the active engine.
+`POST /backtest/signal` accepts a `signal` object plus a `prices` list, runs the signal through an isolated paper engine, marks each supplied price, and returns triggered exits, active exit snapshots after each mark, final paper P&L, final open notional, final positions, closed-P&L drawdown/runup, final mark-to-market unrealized P&L, final total P&L, and the applied cost assumptions. It does not save orders, write audit events, or mutate the active engine.
 
 `POST /backtest/signal` also accepts a `candles` list instead of `prices`. Each candle requires `high`, `low`, and `close`, plus an optional `label`, `time`, or `timestamp`. Candle backtests use a conservative adverse-first path: long signals mark low, high, then close; short signals mark high, low, then close. If a candle could have hit both a stop and a target, this favors the protective stop outcome rather than assuming the profitable target filled first. Each returned mark includes cumulative `mfe` and `mae` percentages from entry.
 
@@ -800,6 +804,29 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/backtest/signal -Conte
     "fee_bps": "10",
     "slippage_bps": "20"
   }
+}'
+```
+
+When a backtest ends with an open simulated bracket lot, `final_unrealized_pnl` marks the remaining quantity at `final_mark_price` and `final_total_pnl` combines realized and unrealized P&L. Add `close_final_positions: true` or `force_close_final: true` to close remaining paper bracket quantity at the final mark inside the sandbox; this records `final_close_triggers`, moves the P&L into `final_daily_pnl`, and leaves the live engine unchanged.
+
+`POST /backtest/bitunix-klines` fetches Bitunix futures kline candles, normalizes them into the same candle backtest path, and returns the regular isolated paper summary plus a `market_data` block. It requires `symbol` and `interval`; optional `start_time`, `end_time`, `limit` up to `200`, and `price_type` map to the native Bitunix market-data request. This endpoint reads public market data only and does not enable Bitunix order execution.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8004/backtest/bitunix-klines -ContentType "application/json" -Body '{
+  "signal": {
+    "symbol": "BTCUSDT",
+    "side": "buy",
+    "quote_amount": "100",
+    "price": "60000",
+    "stop_loss_pct": "3",
+    "take_profit_pct": "6",
+    "trailing_stop_pct": "2"
+  },
+  "symbol": "BTCUSDT",
+  "interval": "15m",
+  "limit": 100,
+  "price_type": "LAST_PRICE",
+  "close_final_positions": true
 }'
 ```
 
@@ -927,10 +954,11 @@ Useful checks:
 Invoke-RestMethod http://127.0.0.1:8004/exchanges
 Invoke-RestMethod http://127.0.0.1:8004/exchanges/bitunix/capabilities
 Invoke-RestMethod "http://127.0.0.1:8004/exchanges/bitunix/futures/tickers?symbols=BTCUSDT,ETHUSDT"
+Invoke-RestMethod "http://127.0.0.1:8004/exchanges/bitunix/futures/klines?symbol=BTCUSDT&interval=15m&limit=100"
 Invoke-RestMethod "http://127.0.0.1:8004/exchanges/bitunix/futures/account?margin_coin=USDT"
 ```
 
-The private account check signs the request using Bitunix's required `api-key`, `nonce`, `timestamp`, and `sign` headers. The bot never returns or logs the secret key.
+The kline check uses Bitunix's public futures market-data endpoint. The private account check signs the request using Bitunix's required `api-key`, `nonce`, `timestamp`, and `sign` headers. The bot never returns or logs the secret key.
 
 ## Persistence
 

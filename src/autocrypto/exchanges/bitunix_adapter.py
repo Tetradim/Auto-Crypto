@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -86,6 +87,27 @@ class BitunixRestClient:
     def get_futures_tickers(self, symbols: str | None = None) -> dict[str, Any]:
         query = {"symbols": symbols} if symbols else None
         return self.request_json("GET", "/api/v1/futures/market/tickers", query=query)
+
+    def get_futures_klines(
+        self,
+        symbol: str,
+        interval: str,
+        *,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int | None = None,
+        price_type: str | None = None,
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {"symbol": symbol.upper(), "interval": interval}
+        if start_time is not None:
+            query["startTime"] = start_time
+        if end_time is not None:
+            query["endTime"] = end_time
+        if limit is not None:
+            query["limit"] = limit
+        if price_type:
+            query["type"] = price_type.upper()
+        return self.request_json("GET", "/api/v1/futures/market/kline", query=query)
 
     def get_futures_account(self, margin_coin: str = "USDT") -> dict[str, Any]:
         return self.request_json(
@@ -228,6 +250,56 @@ def build_websocket_signature(
     canonical_params = "".join(f"{key}{value}" for key, value in sorted((str(k), str(v)) for k, v in params.items()))
     digest = _sha256_hex(f"{nonce}{timestamp}{api_key}{canonical_params}")
     return _sha256_hex(f"{digest}{secret_key}")
+
+
+def bitunix_kline_candles(payload: Mapping[str, Any]) -> list[dict[str, Decimal | str | None]]:
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise BitunixRequestError("Bitunix kline response missing data list")
+    candles: list[dict[str, Decimal | str | None]] = []
+    for item in data:
+        if not isinstance(item, Mapping):
+            raise BitunixRequestError("Bitunix kline entry must be an object")
+        try:
+            high = _decimal_field(item, "high")
+            low = _decimal_field(item, "low")
+            close = _decimal_field(item, "close")
+            open_price = _optional_decimal_field(item, "open")
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise BitunixRequestError("Bitunix kline entry contains an invalid price") from exc
+        if low > high:
+            raise BitunixRequestError("Bitunix kline low cannot exceed high")
+        label = item.get("time") or item.get("timestamp")
+        candles.append(
+            {
+                "label": str(label) if label is not None else None,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+            }
+        )
+    return candles
+
+
+def _decimal_field(item: Mapping[str, Any], field_name: str) -> Decimal:
+    value = item.get(field_name)
+    if value in (None, ""):
+        raise ValueError(f"missing {field_name}")
+    parsed = Decimal(str(value))
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be positive")
+    return parsed
+
+
+def _optional_decimal_field(item: Mapping[str, Any], field_name: str) -> Decimal | None:
+    value = item.get(field_name)
+    if value in (None, ""):
+        return None
+    parsed = Decimal(str(value))
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be positive")
+    return parsed
 
 
 def _sha256_hex(value: str) -> str:

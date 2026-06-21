@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 from urllib.error import URLError
 
 import pytest
@@ -8,6 +9,7 @@ from autocrypto.exchanges.bitunix_adapter import (
     BitunixCredentials,
     BitunixRequestError,
     BitunixRestClient,
+    bitunix_kline_candles,
     build_rest_signature,
     build_websocket_signature,
     canonical_rest_query,
@@ -102,6 +104,39 @@ def test_bitunix_public_ticker_request_uses_futures_market_endpoint():
         "timeout": 10,
     }
     assert response["data"][0]["symbol"] == "BTCUSDT"
+
+
+def test_bitunix_public_kline_request_uses_futures_market_endpoint():
+    captured = {}
+
+    def fake_opener(request, *, timeout):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        return FakeResponse(
+            {
+                "code": 0,
+                "data": [
+                    {
+                        "time": 111111,
+                        "open": "60000",
+                        "high": "60001",
+                        "low": "59989.2",
+                        "close": "60000",
+                    }
+                ],
+                "msg": "Success",
+            }
+        )
+
+    client = BitunixRestClient(opener=fake_opener)
+
+    response = client.get_futures_klines("BTCUSDT", "15m", start_time=1, end_time=10234, limit=50)
+
+    assert captured == {
+        "url": "https://fapi.bitunix.com/api/v1/futures/market/kline?endTime=10234&interval=15m&limit=50&startTime=1&symbol=BTCUSDT",
+        "timeout": 10,
+    }
+    assert bitunix_kline_candles(response)[0]["close"] == Decimal("60000")
 
 
 def test_bitunix_request_errors_are_wrapped():

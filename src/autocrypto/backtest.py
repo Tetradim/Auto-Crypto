@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from .brackets import active_exit_payload
@@ -36,6 +36,11 @@ class BacktestSummary:
     max_runup: Decimal = Decimal("0")
     fee_bps: Decimal = Decimal("0")
     slippage_bps: Decimal = Decimal("0")
+    final_mark_price: Decimal | None = None
+    final_unrealized_pnl: Decimal = Decimal("0")
+    final_total_pnl: Decimal = Decimal("0")
+    final_close_requested: bool = False
+    final_close_triggers: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +63,11 @@ class BacktestSummary:
             "final_daily_pnl": str(self.final_daily_pnl),
             "final_open_notional": str(self.final_open_notional),
             "final_positions": self.final_positions,
+            "final_mark_price": str(self.final_mark_price) if self.final_mark_price is not None else None,
+            "final_unrealized_pnl": str(self.final_unrealized_pnl),
+            "final_total_pnl": str(self.final_total_pnl),
+            "final_close_requested": self.final_close_requested,
+            "final_close_triggers": self.final_close_triggers,
             "total_triggers": self.total_triggers,
             "risk_summary": {
                 "max_drawdown": str(self.max_drawdown),
@@ -107,9 +117,16 @@ def run_signal_backtest(
     prices: list[Decimal],
     *,
     costs: ExecutionCostConfig | None = None,
+    close_final_positions: bool = False,
 ) -> BacktestSummary:
     """Replay one normalized signal and a mark-price path against an isolated paper engine."""
-    return _run_backtest_path(engine, signal, [(None, [price]) for price in prices], costs=costs)
+    return _run_backtest_path(
+        engine,
+        signal,
+        [(None, [price]) for price in prices],
+        costs=costs,
+        close_final_positions=close_final_positions,
+    )
 
 
 def run_signal_candle_backtest(
@@ -118,6 +135,7 @@ def run_signal_candle_backtest(
     candles: list[dict[str, Decimal]],
     *,
     costs: ExecutionCostConfig | None = None,
+    close_final_positions: bool = False,
 ) -> BacktestSummary:
     """Replay OHLC ranges with adverse-first intrabar sequencing.
 
@@ -132,7 +150,7 @@ def run_signal_candle_backtest(
         else:
             prices = [candle["high"], candle["low"], candle["close"]]
         path.append((label, prices))
-    return _run_backtest_path(engine, signal, path, costs=costs)
+    return _run_backtest_path(engine, signal, path, costs=costs, close_final_positions=close_final_positions)
 
 
 def run_signal_stress_backtest(
@@ -146,9 +164,21 @@ def run_signal_stress_backtest(
         name = str(scenario.get("name") or f"scenario-{index}")
         costs = scenario.get("costs")
         if "candles" in scenario:
-            summary = run_signal_candle_backtest(engine, signal, scenario["candles"], costs=costs)
+            summary = run_signal_candle_backtest(
+                engine,
+                signal,
+                scenario["candles"],
+                costs=costs,
+                close_final_positions=bool(scenario.get("close_final_positions", False)),
+            )
         else:
-            summary = run_signal_backtest(engine, signal, scenario["prices"], costs=costs)
+            summary = run_signal_backtest(
+                engine,
+                signal,
+                scenario["prices"],
+                costs=costs,
+                close_final_positions=bool(scenario.get("close_final_positions", False)),
+            )
         results.append(StressScenarioResult(name=name, summary=summary))
     return StressBacktestSummary(scenarios=results)
 
@@ -159,6 +189,7 @@ def _run_backtest_path(
     path: list[tuple[str | None, list[Decimal]]],
     *,
     costs: ExecutionCostConfig | None,
+    close_final_positions: bool,
 ) -> BacktestSummary:
     costs = costs or ExecutionCostConfig()
     sandbox = TradingEngine(
@@ -176,12 +207,15 @@ def _run_backtest_path(
     marks: list[BacktestMark] = []
     mfe: Decimal | None = None
     mae: Decimal | None = None
+    final_mark_price: Decimal | None = None
+    final_close_triggers: list[dict] = []
     if result.status == "accepted":
         for label, prices in path:
             candle_triggered: list[dict] = []
             realized_pnl_delta = Decimal("0")
             last_update = None
             for price in prices:
+                final_mark_price = price
                 mfe, mae = _update_excursion(signal, price, mfe=mfe, mae=mae)
                 last_update = sandbox.mark_price(signal.symbol, price)
                 candle_triggered.extend(last_update.triggered)
@@ -201,6 +235,9 @@ def _run_backtest_path(
                     mae=mae,
                 )
             )
+        if close_final_positions and final_mark_price is not None:
+            final_close_triggers = _close_open_lots_at_mark(sandbox, final_mark_price)
+    final_unrealized_pnl = _unrealized_pnl(sandbox.exchange.lots, final_mark_price)
     return BacktestSummary(
         status=result.status,
         accepted=result.status == "accepted",
@@ -208,12 +245,60 @@ def _run_backtest_path(
         final_daily_pnl=sandbox.account_state.daily_pnl,
         final_open_notional=sandbox.account_state.open_notional,
         final_positions=sandbox.exchange.list_positions(),
-        total_triggers=sum(len(mark.triggered) for mark in marks),
+        total_triggers=sum(len(mark.triggered) for mark in marks) + len(final_close_triggers),
         max_drawdown=_max_drawdown([mark.daily_pnl for mark in marks]),
         max_runup=_max_runup([mark.daily_pnl for mark in marks]),
         fee_bps=costs.fee_bps,
         slippage_bps=costs.slippage_bps,
+        final_mark_price=final_mark_price,
+        final_unrealized_pnl=final_unrealized_pnl,
+        final_total_pnl=sandbox.account_state.daily_pnl + final_unrealized_pnl,
+        final_close_requested=close_final_positions,
+        final_close_triggers=final_close_triggers,
     )
+
+
+def _close_open_lots_at_mark(sandbox: TradingEngine, price: Decimal) -> list[dict]:
+    triggers: list[dict] = []
+    for lot in list(sandbox.exchange.lots):
+        if lot.remaining_quantity <= 0:
+            continue
+        realized_before = _position_realized_pnl(sandbox.exchange, lot.symbol)
+        order = sandbox.exchange.close_bracket(lot.signal_id, price, reason="backtest final close")
+        if order is None:
+            continue
+        realized_delta = _position_realized_pnl(sandbox.exchange, lot.symbol) - realized_before
+        sandbox.account_state.daily_pnl += realized_delta
+        sandbox.account_state.open_notional = sandbox.exchange.open_notional()
+        triggers.append(
+            {
+                "symbol": lot.symbol,
+                "kind": "final_close",
+                "price": str(order.price),
+                "quantity": str(order.notional / order.price) if order.price else "0",
+                "realized_pnl_delta": str(realized_delta),
+            }
+        )
+    return triggers
+
+
+def _unrealized_pnl(lots: list, mark_price: Decimal | None) -> Decimal:
+    if mark_price is None:
+        return Decimal("0")
+    total = Decimal("0")
+    for lot in lots:
+        if lot.remaining_quantity <= 0:
+            continue
+        if lot.direction == "long":
+            total += (mark_price - lot.entry_price) * lot.remaining_quantity
+        else:
+            total += (lot.entry_price - mark_price) * lot.remaining_quantity
+    return total
+
+
+def _position_realized_pnl(exchange: PaperExchange, symbol: str) -> Decimal:
+    position = exchange.positions.get(symbol)
+    return position.realized_pnl if position else Decimal("0")
 
 
 def _update_excursion(
