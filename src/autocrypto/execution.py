@@ -139,6 +139,8 @@ class PaperOrder:
     amend_target_index: int | None = None
     canceled_exit_orders: list[ExitOrder] = field(default_factory=list)
     reduce_only: bool = False
+    netted_quantity: Decimal = Decimal("0")
+    opened_quantity: Decimal | None = None
     fee: Decimal = Decimal("0")
     fee_bps: Decimal = Decimal("0")
     slippage_bps: Decimal = Decimal("0")
@@ -180,6 +182,8 @@ class PaperOrder:
             "amend_target_index": self.amend_target_index,
             "canceled_exit_orders": [exit_order_payload(exit_order) for exit_order in self.canceled_exit_orders],
             "reduce_only": self.reduce_only,
+            "netted_quantity": str(self.netted_quantity),
+            "opened_quantity": str(self.opened_quantity) if self.opened_quantity is not None else None,
             "fee": str(self.fee),
             "fee_bps": str(self.fee_bps),
             "slippage_bps": str(self.slippage_bps),
@@ -234,6 +238,7 @@ class PaperExchange:
         if fill_price is not None:
             quantity = self._fill_quantity(signal, decision.order_notional, fill_price)
         fee = self._fill_fee(quantity or Decimal("0"), fill_price)
+        netted_quantity, opened_quantity = self._netting_quantities(signal, quantity or Decimal("0"), exit_orders)
         order = PaperOrder(
             order_id=f"paper-{signal.signal_id}",
             signal_id=signal.signal_id,
@@ -257,6 +262,8 @@ class PaperExchange:
             profit_lock_after_take_profit_pct=signal.profit_lock_after_take_profit_pct,
             max_hold_marks=signal.max_hold_marks,
             reduce_only=signal.reduce_only,
+            netted_quantity=netted_quantity,
+            opened_quantity=opened_quantity,
             fee=fee,
             fee_bps=self.costs.fee_bps,
             slippage_bps=self.costs.slippage_bps,
@@ -837,6 +844,24 @@ class PaperExchange:
             return Decimal("0")
         return _money(abs(quantity * fill_price) * self.costs.fee_bps / Decimal("10000"))
 
+    def _netting_quantities(
+        self,
+        signal: CryptoSignal,
+        quantity: Decimal,
+        exit_orders: list[ExitOrder],
+    ) -> tuple[Decimal, Decimal | None]:
+        if quantity <= 0 or signal.reduce_only or not exit_orders:
+            return Decimal("0"), quantity if quantity > 0 and exit_orders else None
+        if signal.side == "buy":
+            opposite_quantity = self._open_lot_quantity(signal.symbol, "short")
+        elif signal.side == "sell":
+            opposite_quantity = self._open_lot_quantity(signal.symbol, "long")
+        else:
+            return Decimal("0"), None
+        netted_quantity = min(quantity, opposite_quantity)
+        opened_quantity = quantity - netted_quantity
+        return netted_quantity, opened_quantity if opened_quantity > 0 else Decimal("0")
+
     def _apply_fill(
         self,
         signal: CryptoSignal,
@@ -849,89 +874,145 @@ class PaperExchange:
         if signal.side == "buy" and signal.reduce_only:
             self._buy_quantity(signal.symbol, quantity, fill_price, fee)
         elif signal.side == "buy":
-            position.fees_paid += fee
-            position.buy(quantity, fill_price)
-            self.lots.append(
-                PaperLot(
-                    signal_id=signal.signal_id,
-                    symbol=signal.symbol,
-                    direction="long",
-                    original_quantity=quantity,
-                    remaining_quantity=quantity,
-                    entry_price=fill_price,
-                    exit_orders=exit_orders,
-                    trailing_stop_pct=signal.trailing_stop_pct,
-                    trailing_stop_amount=signal.trailing_stop_amount,
-                    trailing_stop_price=signal.trailing_stop_price,
-                    trailing_step_pct=signal.trailing_step_pct,
-                    trailing_step_amount=signal.trailing_step_amount,
-                    trailing_activation_pct=signal.trailing_activation_pct,
-                    trailing_activation_price=signal.trailing_activation_price,
-                    trail_after_take_profit=signal.trail_after_take_profit,
-                    trailing_activated=_trailing_starts_activated(
-                        signal.trailing_activation_pct,
-                        signal.trailing_activation_price,
-                        signal.trail_after_take_profit,
-                    ),
-                    high_water_mark=signal.price
-                    if _has_trailing_distance(signal.trailing_stop_pct, signal.trailing_stop_amount)
-                    and _trailing_starts_activated(
-                        signal.trailing_activation_pct,
-                        signal.trailing_activation_price,
-                        signal.trail_after_take_profit,
-                    )
-                    else None,
-                    breakeven_trigger_pct=signal.breakeven_trigger_pct,
-                    breakeven_after_take_profit=signal.breakeven_after_take_profit,
-                    profit_lock_after_take_profit_pct=signal.profit_lock_after_take_profit_pct,
-                    max_hold_marks=signal.max_hold_marks,
-                    entry_fee_remaining=fee,
+            netted_quantity = min(quantity, self._open_lot_quantity(signal.symbol, "short")) if exit_orders else Decimal("0")
+            if netted_quantity > 0:
+                self._buy_quantity(
+                    signal.symbol,
+                    netted_quantity,
+                    fill_price,
+                    _proportional_fee(fee, netted_quantity, quantity),
                 )
-            )
+            opened_quantity = quantity - netted_quantity
+            if opened_quantity > 0:
+                self._open_long_lot(
+                    signal,
+                    position,
+                    opened_quantity,
+                    fill_price,
+                    _proportional_fee(fee, opened_quantity, quantity),
+                    exit_orders,
+                )
         elif signal.side == "sell" and signal.reduce_only:
             self._sell_quantity(signal.symbol, quantity, fill_price, fee)
         elif signal.side == "sell" and exit_orders:
-            position.fees_paid += fee
-            position.sell_short(quantity, fill_price)
-            self.lots.append(
-                PaperLot(
-                    signal_id=signal.signal_id,
-                    symbol=signal.symbol,
-                    direction="short",
-                    original_quantity=quantity,
-                    remaining_quantity=quantity,
-                    entry_price=fill_price,
-                    exit_orders=exit_orders,
-                    trailing_stop_pct=signal.trailing_stop_pct,
-                    trailing_stop_amount=signal.trailing_stop_amount,
-                    trailing_stop_price=signal.trailing_stop_price,
-                    trailing_step_pct=signal.trailing_step_pct,
-                    trailing_step_amount=signal.trailing_step_amount,
-                    trailing_activation_pct=signal.trailing_activation_pct,
-                    trailing_activation_price=signal.trailing_activation_price,
-                    trail_after_take_profit=signal.trail_after_take_profit,
-                    trailing_activated=_trailing_starts_activated(
-                        signal.trailing_activation_pct,
-                        signal.trailing_activation_price,
-                        signal.trail_after_take_profit,
-                    ),
-                    low_water_mark=signal.price
-                    if _has_trailing_distance(signal.trailing_stop_pct, signal.trailing_stop_amount)
-                    and _trailing_starts_activated(
-                        signal.trailing_activation_pct,
-                        signal.trailing_activation_price,
-                        signal.trail_after_take_profit,
-                    )
-                    else None,
-                    breakeven_trigger_pct=signal.breakeven_trigger_pct,
-                    breakeven_after_take_profit=signal.breakeven_after_take_profit,
-                    profit_lock_after_take_profit_pct=signal.profit_lock_after_take_profit_pct,
-                    max_hold_marks=signal.max_hold_marks,
-                    entry_fee_remaining=fee,
+            netted_quantity = min(quantity, self._open_lot_quantity(signal.symbol, "long"))
+            if netted_quantity > 0:
+                self._sell_quantity(
+                    signal.symbol,
+                    netted_quantity,
+                    fill_price,
+                    _proportional_fee(fee, netted_quantity, quantity),
                 )
-            )
+            opened_quantity = quantity - netted_quantity
+            if opened_quantity > 0:
+                self._open_short_lot(
+                    signal,
+                    position,
+                    opened_quantity,
+                    fill_price,
+                    _proportional_fee(fee, opened_quantity, quantity),
+                    exit_orders,
+                )
         elif signal.side == "sell":
             self._sell_quantity(signal.symbol, quantity, fill_price, fee)
+
+    def _open_long_lot(
+        self,
+        signal: CryptoSignal,
+        position: PaperPosition,
+        quantity: Decimal,
+        fill_price: Decimal,
+        fee: Decimal,
+        exit_orders: list[ExitOrder],
+    ) -> None:
+        position.fees_paid += fee
+        position.buy(quantity, fill_price)
+        self.lots.append(
+            PaperLot(
+                signal_id=signal.signal_id,
+                symbol=signal.symbol,
+                direction="long",
+                original_quantity=quantity,
+                remaining_quantity=quantity,
+                entry_price=fill_price,
+                exit_orders=exit_orders,
+                trailing_stop_pct=signal.trailing_stop_pct,
+                trailing_stop_amount=signal.trailing_stop_amount,
+                trailing_stop_price=signal.trailing_stop_price,
+                trailing_step_pct=signal.trailing_step_pct,
+                trailing_step_amount=signal.trailing_step_amount,
+                trailing_activation_pct=signal.trailing_activation_pct,
+                trailing_activation_price=signal.trailing_activation_price,
+                trail_after_take_profit=signal.trail_after_take_profit,
+                trailing_activated=_trailing_starts_activated(
+                    signal.trailing_activation_pct,
+                    signal.trailing_activation_price,
+                    signal.trail_after_take_profit,
+                ),
+                high_water_mark=signal.price
+                if _has_trailing_distance(signal.trailing_stop_pct, signal.trailing_stop_amount)
+                and _trailing_starts_activated(
+                    signal.trailing_activation_pct,
+                    signal.trailing_activation_price,
+                    signal.trail_after_take_profit,
+                )
+                else None,
+                breakeven_trigger_pct=signal.breakeven_trigger_pct,
+                breakeven_after_take_profit=signal.breakeven_after_take_profit,
+                profit_lock_after_take_profit_pct=signal.profit_lock_after_take_profit_pct,
+                max_hold_marks=signal.max_hold_marks,
+                entry_fee_remaining=fee,
+            )
+        )
+
+    def _open_short_lot(
+        self,
+        signal: CryptoSignal,
+        position: PaperPosition,
+        quantity: Decimal,
+        fill_price: Decimal,
+        fee: Decimal,
+        exit_orders: list[ExitOrder],
+    ) -> None:
+        position.fees_paid += fee
+        position.sell_short(quantity, fill_price)
+        self.lots.append(
+            PaperLot(
+                signal_id=signal.signal_id,
+                symbol=signal.symbol,
+                direction="short",
+                original_quantity=quantity,
+                remaining_quantity=quantity,
+                entry_price=fill_price,
+                exit_orders=exit_orders,
+                trailing_stop_pct=signal.trailing_stop_pct,
+                trailing_stop_amount=signal.trailing_stop_amount,
+                trailing_stop_price=signal.trailing_stop_price,
+                trailing_step_pct=signal.trailing_step_pct,
+                trailing_step_amount=signal.trailing_step_amount,
+                trailing_activation_pct=signal.trailing_activation_pct,
+                trailing_activation_price=signal.trailing_activation_price,
+                trail_after_take_profit=signal.trail_after_take_profit,
+                trailing_activated=_trailing_starts_activated(
+                    signal.trailing_activation_pct,
+                    signal.trailing_activation_price,
+                    signal.trail_after_take_profit,
+                ),
+                low_water_mark=signal.price
+                if _has_trailing_distance(signal.trailing_stop_pct, signal.trailing_stop_amount)
+                and _trailing_starts_activated(
+                    signal.trailing_activation_pct,
+                    signal.trailing_activation_price,
+                    signal.trail_after_take_profit,
+                )
+                else None,
+                breakeven_trigger_pct=signal.breakeven_trigger_pct,
+                breakeven_after_take_profit=signal.breakeven_after_take_profit,
+                profit_lock_after_take_profit_pct=signal.profit_lock_after_take_profit_pct,
+                max_hold_marks=signal.max_hold_marks,
+                entry_fee_remaining=fee,
+            )
+        )
 
     def _replay_order(self, order: PaperOrder) -> None:
         self.orders.append(order)
@@ -960,87 +1041,45 @@ class PaperExchange:
         if order.side == "buy" and order.reduce_only:
             self._buy_quantity(order.symbol, quantity, order.price, order.fee)
         elif order.side == "buy":
-            position.fees_paid += order.fee
-            position.buy(quantity, order.price)
-            self.lots.append(
-                PaperLot(
-                    signal_id=order.signal_id,
-                    symbol=order.symbol,
-                    direction="long",
-                    original_quantity=quantity,
-                    remaining_quantity=quantity,
-                    entry_price=order.price,
-                    exit_orders=order.exit_orders,
-                    trailing_stop_pct=order.trailing_stop_pct,
-                    trailing_stop_amount=order.trailing_stop_amount,
-                    trailing_stop_price=order.trailing_stop_price,
-                    trailing_step_pct=order.trailing_step_pct,
-                    trailing_step_amount=order.trailing_step_amount,
-                    trailing_activation_pct=order.trailing_activation_pct,
-                    trailing_activation_price=order.trailing_activation_price,
-                    trail_after_take_profit=order.trail_after_take_profit,
-                    trailing_activated=_trailing_starts_activated(
-                        order.trailing_activation_pct,
-                        order.trailing_activation_price,
-                        order.trail_after_take_profit,
-                    ),
-                    high_water_mark=order.price
-                    if _has_trailing_distance(order.trailing_stop_pct, order.trailing_stop_amount)
-                    and _trailing_starts_activated(
-                        order.trailing_activation_pct,
-                        order.trailing_activation_price,
-                        order.trail_after_take_profit,
-                    )
-                    else None,
-                    breakeven_trigger_pct=order.breakeven_trigger_pct,
-                    breakeven_after_take_profit=order.breakeven_after_take_profit,
-                    profit_lock_after_take_profit_pct=order.profit_lock_after_take_profit_pct,
-                    max_hold_marks=order.max_hold_marks,
-                    entry_fee_remaining=order.fee,
+            netted_quantity = min(quantity, self._open_lot_quantity(order.symbol, "short")) if order.exit_orders else Decimal("0")
+            if netted_quantity > 0:
+                self._buy_quantity(
+                    order.symbol,
+                    netted_quantity,
+                    order.price,
+                    _proportional_fee(order.fee, netted_quantity, quantity),
                 )
-            )
+            opened_quantity = quantity - netted_quantity
+            if opened_quantity > 0:
+                self._open_long_lot(
+                    order,
+                    position,
+                    opened_quantity,
+                    order.price,
+                    _proportional_fee(order.fee, opened_quantity, quantity),
+                    order.exit_orders,
+                )
         elif order.side == "sell" and order.reduce_only:
             self._sell_quantity(order.symbol, quantity, order.price, order.fee)
         elif order.side == "sell" and order.exit_orders:
-            position.fees_paid += order.fee
-            position.sell_short(quantity, order.price)
-            self.lots.append(
-                PaperLot(
-                    signal_id=order.signal_id,
-                    symbol=order.symbol,
-                    direction="short",
-                    original_quantity=quantity,
-                    remaining_quantity=quantity,
-                    entry_price=order.price,
-                    exit_orders=order.exit_orders,
-                    trailing_stop_pct=order.trailing_stop_pct,
-                    trailing_stop_amount=order.trailing_stop_amount,
-                    trailing_stop_price=order.trailing_stop_price,
-                    trailing_step_pct=order.trailing_step_pct,
-                    trailing_step_amount=order.trailing_step_amount,
-                    trailing_activation_pct=order.trailing_activation_pct,
-                    trailing_activation_price=order.trailing_activation_price,
-                    trail_after_take_profit=order.trail_after_take_profit,
-                    trailing_activated=_trailing_starts_activated(
-                        order.trailing_activation_pct,
-                        order.trailing_activation_price,
-                        order.trail_after_take_profit,
-                    ),
-                    low_water_mark=order.price
-                    if _has_trailing_distance(order.trailing_stop_pct, order.trailing_stop_amount)
-                    and _trailing_starts_activated(
-                        order.trailing_activation_pct,
-                        order.trailing_activation_price,
-                        order.trail_after_take_profit,
-                    )
-                    else None,
-                    breakeven_trigger_pct=order.breakeven_trigger_pct,
-                    breakeven_after_take_profit=order.breakeven_after_take_profit,
-                    profit_lock_after_take_profit_pct=order.profit_lock_after_take_profit_pct,
-                    max_hold_marks=order.max_hold_marks,
-                    entry_fee_remaining=order.fee,
+            netted_quantity = min(quantity, self._open_lot_quantity(order.symbol, "long"))
+            if netted_quantity > 0:
+                self._sell_quantity(
+                    order.symbol,
+                    netted_quantity,
+                    order.price,
+                    _proportional_fee(order.fee, netted_quantity, quantity),
                 )
-            )
+            opened_quantity = quantity - netted_quantity
+            if opened_quantity > 0:
+                self._open_short_lot(
+                    order,
+                    position,
+                    opened_quantity,
+                    order.price,
+                    _proportional_fee(order.fee, opened_quantity, quantity),
+                    order.exit_orders,
+                )
         elif order.side == "sell":
             self._sell_quantity(order.symbol, quantity, order.price, order.fee)
         self._refresh_active_exits(order.symbol)
@@ -1439,6 +1478,16 @@ class PaperExchange:
                 sum((lot.entry_price * lot.remaining_quantity for lot in open_lots), Decimal("0"))
                 / lot_quantity
             )
+
+    def _open_lot_quantity(self, symbol: str, direction: str) -> Decimal:
+        return sum(
+            (
+                lot.remaining_quantity
+                for lot in self.lots
+                if lot.symbol == symbol and lot.direction == direction and lot.remaining_quantity > 0
+            ),
+            Decimal("0"),
+        )
 
     def _refresh_active_exits(self, symbol: str) -> None:
         exits = [
@@ -1941,6 +1990,10 @@ def _paper_order_from_dict(payload: dict) -> PaperOrder:
             for exit_order in payload.get("canceled_exit_orders", [])
         ],
         reduce_only=bool(payload.get("reduce_only", False)),
+        netted_quantity=Decimal(str(payload.get("netted_quantity") or "0")),
+        opened_quantity=Decimal(str(payload["opened_quantity"]))
+        if payload.get("opened_quantity") is not None
+        else None,
         fee=Decimal(str(payload.get("fee") or "0")),
         fee_bps=Decimal(str(payload.get("fee_bps") or "0")),
         slippage_bps=Decimal(str(payload.get("slippage_bps") or "0")),

@@ -191,6 +191,158 @@ def test_manual_partial_sell_uses_same_lot_accounting_as_bracket_exits():
     assert after_exit["realized_pnl"] == "70.00000000"
 
 
+def test_bracketed_sell_nets_long_lot_before_opening_short_trailing_bracket():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    long_signal = normalize_signal(
+        {
+            "signal_id": "long-before-reversal",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+        source="test",
+    )
+    reversal_signal = normalize_signal(
+        {
+            "signal_id": "sell-reversal",
+            "symbol": "BTC/USDT",
+            "side": "sell",
+            "quote_amount": "300",
+            "price": "150",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+            "trailing_stop_pct": "4",
+        },
+        source="test",
+    )
+
+    engine.process_signal(long_signal)
+    result = engine.process_signal(reversal_signal)
+    position = exchange.list_positions()[0]
+    lots = [(lot.signal_id, lot.direction, lot.remaining_quantity) for lot in exchange.lots]
+
+    assert result.order.netted_quantity == Decimal("1")
+    assert result.order.opened_quantity == Decimal("1")
+    assert position["quantity"] == "-1.00000000"
+    assert position["avg_entry"] == "150.00000000"
+    assert position["realized_pnl"] == "50.00000000"
+    assert lots == [("sell-reversal", "short", Decimal("1"))]
+
+    exchange.update_price("BTC/USDT", Decimal("140"))
+    trailing_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    triggered = exchange.update_price("BTC/USDT", Decimal("145.60"))
+
+    assert trailing_exit.trigger_price == Decimal("145.60")
+    assert triggered == [
+        {"symbol": "BTC/USDT", "kind": "trailing_stop", "price": "145.60000000", "quantity": "1.00000000"}
+    ]
+    assert exchange.list_positions()[0]["quantity"] == "0.00000000"
+    assert exchange.list_positions()[0]["realized_pnl"] == "54.40000000"
+
+
+def test_bracketed_buy_nets_short_lot_before_opening_long_trailing_bracket():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    short_signal = normalize_signal(
+        {
+            "signal_id": "short-before-reversal",
+            "symbol": "ETH/USDT",
+            "side": "sell",
+            "quote_amount": "200",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+        source="test",
+    )
+    reversal_signal = normalize_signal(
+        {
+            "signal_id": "buy-reversal",
+            "symbol": "ETH/USDT",
+            "side": "buy",
+            "quote_amount": "300",
+            "price": "75",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "30",
+            "trailing_stop_pct": "4",
+        },
+        source="test",
+    )
+
+    engine.process_signal(short_signal)
+    result = engine.process_signal(reversal_signal)
+    position = exchange.list_positions()[0]
+    lots = [(lot.signal_id, lot.direction, lot.remaining_quantity) for lot in exchange.lots]
+
+    assert result.order.netted_quantity == Decimal("2")
+    assert result.order.opened_quantity == Decimal("2")
+    assert position["quantity"] == "2.00000000"
+    assert position["avg_entry"] == "75.00000000"
+    assert position["realized_pnl"] == "50.00000000"
+    assert lots == [("buy-reversal", "long", Decimal("2"))]
+
+    exchange.update_price("ETH/USDT", Decimal("90"))
+    trailing_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    triggered = exchange.update_price("ETH/USDT", Decimal("86.40"))
+
+    assert trailing_exit.trigger_price == Decimal("86.40")
+    assert triggered == [
+        {"symbol": "ETH/USDT", "kind": "trailing_stop", "price": "86.40000000", "quantity": "2.00000000"}
+    ]
+    assert exchange.list_positions()[0]["quantity"] == "0.00000000"
+    assert exchange.list_positions()[0]["realized_pnl"] == "72.80000000"
+
+
+def test_replayed_reversal_order_history_keeps_only_residual_bracket_lot():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    engine.process_signal(
+        normalize_signal(
+            {
+                "signal_id": "replay-long-before-reversal",
+                "symbol": "SOL/USDT",
+                "side": "buy",
+                "quote_amount": "100",
+                "price": "100",
+                "stop_loss_pct": "5",
+                "take_profit_pct": "10",
+            },
+            source="test",
+        )
+    )
+    engine.process_signal(
+        normalize_signal(
+            {
+                "signal_id": "replay-sell-reversal",
+                "symbol": "SOL/USDT",
+                "side": "sell",
+                "quote_amount": "250",
+                "price": "125",
+                "stop_loss_pct": "4",
+                "take_profit_pct": "8",
+                "trailing_stop_pct": "3",
+            },
+            source="test",
+        )
+    )
+
+    replayed = PaperExchange.from_order_history([order.to_dict() for order in exchange.orders])
+    position = replayed.list_positions()[0]
+
+    assert position["quantity"] == "-1.00000000"
+    assert position["avg_entry"] == "125.00000000"
+    assert position["realized_pnl"] == "25.00000000"
+    assert [(lot.signal_id, lot.direction, lot.remaining_quantity) for lot in replayed.lots] == [
+        ("replay-sell-reversal", "short", Decimal("1"))
+    ]
+    assert replayed.orders[-1].netted_quantity == Decimal("1")
+    assert replayed.orders[-1].opened_quantity == Decimal("1")
+
+
 def test_trailing_stop_ratcheted_up_then_triggers_on_pullback():
     exchange = PaperExchange()
     engine = TradingEngine(exchange=exchange)
