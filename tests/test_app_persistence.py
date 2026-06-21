@@ -227,6 +227,49 @@ def test_app_replays_trailing_stop_amendment_after_restart(tmp_path):
     assert any(event.event_type == "bracket.trailing_stop_amended" for event in repo.list_audit())
 
 
+def test_app_replays_trailing_stop_mark_amendment_after_restart(tmp_path):
+    db_path = tmp_path / "trailing_mark_amend_replay.sqlite3"
+    first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "replay-trail-mark-amend",
+            "symbol": "SOLUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "20",
+            "trailing_stop_pct": "4",
+            "trailing_activation_pct": "3",
+        },
+    )
+    rejected = first_client.post("/brackets/replay-trail-mark-amend/trailing-stop/mark", json={"mark_price": "102"})
+    amended = first_client.post(
+        "/brackets/replay-trail-mark-amend/trailing-stop/mark",
+        json={"mark_price": "110", "reason": "operator tightened trail from mark"},
+    )
+
+    second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    bracket = second_client.get("/brackets/replay-trail-mark-amend").json()
+    trailing_exit = next(exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "trailing_stop")
+    triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "105.60"})
+    repo = SQLiteRepository(db_path)
+
+    assert rejected.status_code == 409
+    assert amended.status_code == 200
+    assert amended.json()["order"]["exit_kind"] == "bracket_trailing_stop_mark_amend"
+    assert amended.json()["mark_price"] == "110"
+    assert trailing_exit["trigger_price"] == "105.60"
+    assert trailing_exit["status"] == "open"
+    assert trailing_exit["trailing_activated"] == "true"
+    assert triggered.json()["triggered"] == [
+        {"symbol": "SOL/USDT", "kind": "trailing_stop", "price": "105.60000000", "quantity": "1.00000000"}
+    ]
+    assert repo.list_orders()[1]["exit_kind"] == "bracket_trailing_stop_mark_amend"
+    assert any(event.event_type == "bracket.trailing_stop_mark_amended" for event in repo.list_audit())
+
+
 def test_app_replays_take_profit_amendment_after_restart(tmp_path):
     db_path = tmp_path / "take_profit_amend_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))

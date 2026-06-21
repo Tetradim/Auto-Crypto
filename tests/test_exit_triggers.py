@@ -1293,6 +1293,71 @@ def test_amend_long_trailing_stop_tightens_and_arms_pending_trail():
     ]
 
 
+def test_tighten_long_trailing_stop_to_mark_derives_protective_trigger():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "trail-from-long-mark",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "take_profit_pct": "30",
+            "trailing_stop_pct": "5",
+            "trailing_activation_pct": "4",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    rejected = exchange.tighten_bracket_trailing_stop_to_mark("trail-from-long-mark", Decimal("102"))
+    amended = exchange.tighten_bracket_trailing_stop_to_mark("trail-from-long-mark", Decimal("110"))
+    trailing_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    high_water_mark = exchange.lots[0].high_water_mark
+    triggered = exchange.update_price("BTC/USDT", Decimal("104.50"))
+
+    assert rejected is None
+    assert amended is not None
+    assert amended.exit_kind == "bracket_trailing_stop_mark_amend"
+    assert amended.price == Decimal("110.00")
+    assert trailing_exit.status == "open"
+    assert trailing_exit.trigger_price == Decimal("104.50")
+    assert high_water_mark == Decimal("110.0")
+    assert triggered == [
+        {"symbol": "BTC/USDT", "kind": "trailing_stop", "price": "104.50000000", "quantity": "1.00000000"}
+    ]
+
+
+def test_tighten_trailing_stop_to_mark_respects_trailing_step():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "trail-from-mark-step",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "take_profit_pct": "30",
+            "trailing_stop_pct": "5",
+            "trailing_step_amount": "2",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    small_step = exchange.tighten_bracket_trailing_stop_to_mark("trail-from-mark-step", Decimal("101"))
+    amended = exchange.tighten_bracket_trailing_stop_to_mark("trail-from-mark-step", Decimal("103"))
+    trailing_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+
+    assert small_step is None
+    assert amended is not None
+    assert trailing_exit.trigger_price == Decimal("97.85")
+
+
 def test_manual_breakeven_moves_stop_and_trailing_exit_to_entry():
     exchange = PaperExchange()
     engine = TradingEngine(exchange=exchange)
@@ -1362,6 +1427,42 @@ def test_amend_short_trailing_stop_tightens_downward():
     assert trailing_exit.trigger_price == Decimal("102.00")
     assert triggered == [
         {"symbol": "ETH/USDT", "kind": "trailing_stop", "price": "102.00000000", "quantity": "1.00000000"}
+    ]
+
+
+def test_tighten_short_trailing_stop_to_mark_derives_protective_trigger():
+    exchange = PaperExchange()
+    engine = TradingEngine(exchange=exchange)
+    signal = normalize_signal(
+        {
+            "signal_id": "trail-from-short-mark",
+            "symbol": "ETH/USDT",
+            "side": "short",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "10",
+            "take_profit_pct": "30",
+            "trailing_stop_amount": "4",
+            "trailing_activation_pct": "3",
+        },
+        source="test",
+    )
+    engine.process_signal(signal)
+
+    rejected = exchange.tighten_bracket_trailing_stop_to_mark("trail-from-short-mark", Decimal("98"))
+    amended = exchange.tighten_bracket_trailing_stop_to_mark("trail-from-short-mark", Decimal("94"))
+    trailing_exit = next(exit_order for exit_order in exchange.lots[0].exit_orders if exit_order.kind == "trailing_stop")
+    low_water_mark = exchange.lots[0].low_water_mark
+    triggered = exchange.update_price("ETH/USDT", Decimal("98"))
+
+    assert rejected is None
+    assert amended is not None
+    assert amended.exit_kind == "bracket_trailing_stop_mark_amend"
+    assert trailing_exit.status == "open"
+    assert trailing_exit.trigger_price == Decimal("98.00")
+    assert low_water_mark == Decimal("94.00")
+    assert triggered == [
+        {"symbol": "ETH/USDT", "kind": "trailing_stop", "price": "98.00000000", "quantity": "1.00000000"}
     ]
 
 

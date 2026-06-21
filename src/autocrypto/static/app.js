@@ -805,7 +805,8 @@ function renderPortfolio() {
         const status = String(exit.status || "open").replaceAll("_", " ");
         const statusClass = exit.status === "pending_activation" ? "amber" : exit.status === "filled" ? "green" : "";
         const trailingAction = exit.kind === "trailing_stop"
-          ? `<button type="button" data-action="amend-bracket-trailing-stop" data-signal-id="${escapeHtml(exit.signal_id)}" data-price="${escapeHtml(exit.trigger_price)}">Tighten Trail</button>`
+          ? `<button type="button" data-action="amend-bracket-trailing-stop" data-signal-id="${escapeHtml(exit.signal_id)}" data-price="${escapeHtml(exit.trigger_price)}">Tighten Trail</button>
+                <button type="button" data-action="tighten-bracket-trailing-stop-to-mark" data-signal-id="${escapeHtml(exit.signal_id)}" data-symbol="${escapeHtml(compact)}">Trail From Mark</button>`
           : "";
         const takeProfitAction = exit.kind === "take_profit"
           ? `<button type="button" data-action="amend-bracket-take-profit" data-signal-id="${escapeHtml(exit.signal_id)}" data-price="${escapeHtml(exit.trigger_price)}">Raise TP</button>`
@@ -1241,6 +1242,21 @@ async function amendBracketTrailingStop(signalId, currentPrice) {
   });
   appState.lastPayload = result;
   setStatus(`Tightened ${signalId} trailing stop to ${triggerPrice}.`, "ok");
+  await loadState(false);
+}
+
+async function tightenBracketTrailingStopToMark(signalId, symbol) {
+  const markPrice = window.prompt("Mark price to derive the tightened trailing trigger", currentMarkPrice(symbol) || "");
+  if (!markPrice) {
+    setStatus("Trailing stop mark amendment canceled.", "warn");
+    return;
+  }
+  const result = await api(`/brackets/${encodeURIComponent(signalId)}/trailing-stop/mark`, {
+    method: "POST",
+    body: { mark_price: markPrice, reason: "operator UI trailing stop tighten from mark" },
+  });
+  appState.lastPayload = result;
+  setStatus(`Tightened ${signalId} trailing stop from mark ${markPrice}.`, "ok");
   await loadState(false);
 }
 
@@ -1933,6 +1949,10 @@ function bindEvents() {
     }
     if (action === "amend-bracket-trailing-stop") {
       amendBracketTrailingStop(target.dataset.signalId, target.dataset.price)
+        .catch((error) => setStatus(error.message, "error"));
+    }
+    if (action === "tighten-bracket-trailing-stop-to-mark") {
+      tightenBracketTrailingStopToMark(target.dataset.signalId, target.dataset.symbol)
         .catch((error) => setStatus(error.message, "error"));
     }
     if (action === "amend-bracket-take-profit") {

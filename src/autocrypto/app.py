@@ -652,6 +652,51 @@ def create_app(
             "account": _account_state_to_dict(engine.account_state),
         }
 
+    @app.post("/brackets/{signal_id}/trailing-stop/mark")
+    async def tighten_bracket_trailing_stop_to_mark(signal_id: str, request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            mark_price = _positive_decimal(payload.get("mark_price") or payload.get("price"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        reason = str(payload.get("reason") or "manual trailing stop tighten from mark")
+        order = engine.exchange.tighten_bracket_trailing_stop_to_mark(signal_id, mark_price, reason=reason)
+        if order is None:
+            raise HTTPException(
+                status_code=409,
+                detail="active trailing stop not found, mark is not favorable, or amendment would loosen risk",
+            )
+        engine.account_state.open_notional = engine.exchange.open_notional()
+        if repository:
+            repository.save_order(order)
+            repository.record_audit(
+                "bracket.trailing_stop_mark_amended",
+                {
+                    "signal_id": signal_id,
+                    "reason": reason,
+                    "mark_price": str(mark_price),
+                    "exit_orders": [
+                        {
+                            "kind": exit_order.kind,
+                            "trigger_price": str(exit_order.trigger_price),
+                            "close_pct": str(exit_order.close_pct),
+                            "oca_group": exit_order.oca_group,
+                            "status": exit_order.status,
+                        }
+                        for exit_order in order.exit_orders
+                    ],
+                },
+            )
+        return {
+            "status": "amended",
+            "signal_id": signal_id,
+            "mark_price": str(mark_price),
+            "order": order.to_dict(),
+            "active_exits": _active_exits_to_dict(engine.exchange.lots, signal_id=signal_id, mark_price=mark_price),
+            "positions": engine.exchange.list_positions(),
+            "account": _account_state_to_dict(engine.account_state),
+        }
+
     @app.post("/brackets/{signal_id}/take-profit")
     async def amend_bracket_take_profit(signal_id: str, request: Request) -> dict[str, Any]:
         payload = await request.json()

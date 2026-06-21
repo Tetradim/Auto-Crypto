@@ -639,6 +639,59 @@ class PaperExchange:
         self._refresh_active_exits(first_lot.symbol)
         return order
 
+    def tighten_bracket_trailing_stop_to_mark(
+        self,
+        signal_id: str,
+        mark_price: Decimal,
+        *,
+        reason: str = "",
+    ) -> PaperOrder | None:
+        """Tighten a paper trailing stop by deriving its next trigger from a favorable mark."""
+        target_lots = [
+            lot
+            for lot in self.lots
+            if lot.signal_id == signal_id and lot.remaining_quantity > 0 and lot.exit_orders
+        ]
+        if not target_lots:
+            return None
+
+        amended_trails: list[ExitOrder] = []
+        for lot in target_lots:
+            trigger_price = _candidate_trailing_trigger(lot, _money(mark_price))
+            if trigger_price is None:
+                return None
+            current_trigger = _current_trailing_trigger(lot)
+            if current_trigger is not None and not _trailing_step_reached(lot, current_trigger, trigger_price):
+                return None
+            amended_trail = _protective_trailing_amendment(lot, trigger_price)
+            if amended_trail is None:
+                return None
+            lot.exit_orders = _replace_or_append_trailing_stop(lot.exit_orders, amended_trail)
+            if lot.direction == "long":
+                lot.high_water_mark = max(lot.high_water_mark or lot.entry_price, _money(mark_price))
+            else:
+                lot.low_water_mark = min(lot.low_water_mark or lot.entry_price, _money(mark_price))
+            _sync_trailing_water_mark(lot, amended_trail.trigger_price)
+            amended_trails.append(amended_trail)
+
+        first_lot = target_lots[0]
+        order = PaperOrder(
+            order_id=f"paper-amend-trail-mark-{_order_fragment(signal_id)}-{len(self.orders) + 1}",
+            signal_id=signal_id,
+            mode="paper",
+            exchange="paper",
+            symbol=first_lot.symbol,
+            side="amend",
+            notional=Decimal("0"),
+            price=_money(mark_price),
+            exit_orders=amended_trails,
+            exit_kind="bracket_trailing_stop_mark_amend",
+            status="amended",
+        )
+        self.orders.append(order)
+        self._refresh_active_exits(first_lot.symbol)
+        return order
+
     def amend_bracket_take_profit(
         self,
         signal_id: str,
@@ -895,7 +948,7 @@ class PaperExchange:
         if order.exit_kind == "bracket_stop_amend":
             self._replay_bracket_stop_amend(order)
             return
-        if order.exit_kind == "bracket_trailing_stop_amend":
+        if order.exit_kind in {"bracket_trailing_stop_amend", "bracket_trailing_stop_mark_amend"}:
             self._replay_bracket_trailing_stop_amend(order)
             return
         if order.exit_kind == "bracket_take_profit_amend":
@@ -1762,6 +1815,24 @@ def _trailing_distance(lot: PaperLot, price: Decimal) -> Decimal:
 def _current_trailing_trigger(lot: PaperLot) -> Decimal | None:
     trailing_exit = next((exit_order for exit_order in lot.exit_orders if exit_order.kind == "trailing_stop"), None)
     return trailing_exit.trigger_price if trailing_exit is not None else None
+
+
+def _candidate_trailing_trigger(lot: PaperLot, mark_price: Decimal) -> Decimal | None:
+    if not _has_trailing_distance(lot.trailing_stop_pct, lot.trailing_stop_amount):
+        return None
+    if lot.trail_after_take_profit and not lot.take_profit_filled:
+        return None
+    if not lot.trailing_activated and _has_trailing_activation(lot):
+        activation_price = _trailing_activation_price(lot)
+        if lot.direction == "long" and mark_price < activation_price:
+            return None
+        if lot.direction == "short" and mark_price > activation_price:
+            return None
+    if lot.direction == "long":
+        water_mark = max(lot.high_water_mark or lot.entry_price, mark_price)
+        return _money(water_mark - _trailing_distance(lot, water_mark))
+    water_mark = min(lot.low_water_mark or lot.entry_price, mark_price)
+    return _money(water_mark + _trailing_distance(lot, water_mark))
 
 
 def _trailing_step_reached(lot: PaperLot, current_trigger: Decimal, next_trigger: Decimal) -> bool:
