@@ -362,6 +362,18 @@ def create_app(
     def bracket_health() -> dict[str, Any]:
         return {"health": _bracket_health(engine.exchange.lots)}
 
+    @app.get("/brackets/coverage")
+    def bracket_coverage() -> dict[str, Any]:
+        active_lots = [
+            lot
+            for lot in engine.exchange.lots
+            if lot.remaining_quantity > 0 and lot.exit_orders
+        ]
+        return {
+            "bracket_count": len(active_lots),
+            "coverage": [_bracket_coverage_to_dict(lot) for lot in active_lots],
+        }
+
     @app.get("/brackets/{signal_id}")
     def bracket_status(signal_id: str) -> dict[str, Any]:
         lots = [
@@ -436,12 +448,19 @@ def create_app(
         if not lots:
             raise HTTPException(status_code=404, detail="active bracket not found")
         symbol = lots[0].symbol
+        would_trigger = engine.exchange.preview_bracket(signal_id, price)
         preview_exchange = engine.exchange.preview_bracket_exchange(signal_id, price)
         return {
             "signal_id": signal_id,
             "symbol": symbol,
             "price": str(price),
-            "would_trigger": engine.exchange.preview_bracket(signal_id, price),
+            "would_trigger": would_trigger,
+            "impact": _bracket_preview_impact(
+                lots,
+                preview_exchange=preview_exchange,
+                signal_id=signal_id,
+                would_trigger=would_trigger,
+            ),
             "active_exits": _active_exits_to_dict(lots, signal_id=signal_id, mark_price=price),
             "preview_active_exits": _active_exits_to_dict(
                 preview_exchange.lots if preview_exchange is not None else [],
@@ -1920,6 +1939,120 @@ def _bracket_decision_support_to_dict(lot: Any, *, mark_price: Decimal | None = 
         "trailing": trailing_rows,
         "trigger_sequence": rows,
     }
+
+
+def _bracket_coverage_to_dict(lot: Any) -> dict[str, Any]:
+    open_exits = [exit_order for exit_order in lot.exit_orders if exit_order.status == "open"]
+    take_profit_close_pct = sum(
+        (exit_order.close_pct for exit_order in open_exits if exit_order.kind == "take_profit"),
+        Decimal("0"),
+    )
+    trailing_close_pct = sum(
+        (exit_order.close_pct for exit_order in open_exits if exit_order.kind == "trailing_stop"),
+        Decimal("0"),
+    )
+    protective_close_pct = max(
+        (exit_order.close_pct for exit_order in open_exits if exit_order.kind in {"stop_loss", "trailing_stop"}),
+        default=Decimal("0"),
+    )
+    full_close_exit_count = sum(
+        1
+        for exit_order in open_exits
+        if exit_order.kind != "time_exit" and _exit_ladder_quantity(lot, exit_order) >= lot.remaining_quantity
+    )
+    partial_close_exit_count = sum(
+        1
+        for exit_order in open_exits
+        if exit_order.kind != "time_exit" and _exit_ladder_quantity(lot, exit_order) < lot.remaining_quantity
+    )
+    return {
+        "signal_id": lot.signal_id,
+        "symbol": lot.symbol,
+        "direction": lot.direction,
+        "remaining_quantity": str(lot.remaining_quantity),
+        "take_profit_close_pct": _decimal_to_plain(take_profit_close_pct),
+        "trailing_stop_close_pct": _decimal_to_plain(trailing_close_pct) if trailing_close_pct else None,
+        "protective_close_pct": _decimal_to_plain(protective_close_pct),
+        "residual_after_take_profit_pct": _decimal_to_plain(max(Decimal("100") - take_profit_close_pct, Decimal("0"))),
+        "has_full_protective_exit": any(
+            exit_order.kind in {"stop_loss", "trailing_stop"} and _exit_ladder_quantity(lot, exit_order) >= lot.remaining_quantity
+            for exit_order in open_exits
+        ),
+        "has_full_profit_exit": take_profit_close_pct >= Decimal("100"),
+        "has_time_exit": any(exit_order.kind == "time_exit" for exit_order in lot.exit_orders),
+        "full_close_exit_count": full_close_exit_count,
+        "partial_close_exit_count": partial_close_exit_count,
+        "coverage_notes": _bracket_coverage_notes(lot, open_exits, take_profit_close_pct),
+    }
+
+
+def _bracket_coverage_notes(lot: Any, open_exits: list[Any], take_profit_close_pct: Decimal) -> list[str]:
+    notes: list[str] = []
+    if not any(exit_order.kind in {"stop_loss", "trailing_stop"} for exit_order in open_exits):
+        notes.append("no_open_protective_exit")
+    if take_profit_close_pct == 0:
+        notes.append("no_open_take_profit_exit")
+    elif take_profit_close_pct < Decimal("100"):
+        notes.append("take_profit_plan_leaves_residual")
+    if any(
+        exit_order.kind in {"take_profit", "trailing_stop"} and _exit_ladder_quantity(lot, exit_order) < lot.remaining_quantity
+        for exit_order in open_exits
+    ):
+        notes.append("contains_partial_exit")
+    if any(exit_order.kind == "time_exit" for exit_order in lot.exit_orders):
+        notes.append("contains_paper_time_exit")
+    return notes
+
+
+def _bracket_preview_impact(
+    lots: list[Any],
+    *,
+    preview_exchange: Any | None,
+    signal_id: str,
+    would_trigger: list[dict[str, Any]],
+) -> dict[str, Any]:
+    preview_lots = [
+        lot
+        for lot in (preview_exchange.lots if preview_exchange is not None else [])
+        if lot.signal_id == signal_id and lot.remaining_quantity > 0 and lot.exit_orders
+    ]
+    before_quantity = sum((lot.remaining_quantity for lot in lots), Decimal("0"))
+    after_quantity = sum((lot.remaining_quantity for lot in preview_lots), Decimal("0"))
+    return {
+        "mutates_state": False,
+        "will_trigger": bool(would_trigger),
+        "triggered_kinds": [item["kind"] for item in would_trigger],
+        "will_close_bracket": before_quantity > 0 and after_quantity == 0,
+        "remaining_quantity_before": _decimal_to_plain(before_quantity),
+        "remaining_quantity_after": _decimal_to_plain(after_quantity),
+        "quantity_delta": _decimal_to_plain(after_quantity - before_quantity),
+        "trailing_ratchets": _trailing_ratchet_impacts(lots, preview_lots),
+    }
+
+
+def _trailing_ratchet_impacts(live_lots: list[Any], preview_lots: list[Any]) -> list[dict[str, Any]]:
+    impacts: list[dict[str, Any]] = []
+    for live_lot in live_lots:
+        preview_lot = next((lot for lot in preview_lots if lot.signal_id == live_lot.signal_id), None)
+        if preview_lot is None:
+            continue
+        live_trail = next((exit_order for exit_order in live_lot.exit_orders if exit_order.kind == "trailing_stop"), None)
+        preview_trail = next((exit_order for exit_order in preview_lot.exit_orders if exit_order.kind == "trailing_stop"), None)
+        if live_trail is None or preview_trail is None or live_trail.trigger_price == preview_trail.trigger_price:
+            continue
+        impacts.append(
+            {
+                "signal_id": live_lot.signal_id,
+                "before_trigger_price": str(live_trail.trigger_price),
+                "after_trigger_price": str(preview_trail.trigger_price),
+                "trigger_change": _decimal_to_plain(preview_trail.trigger_price - live_trail.trigger_price)
+                if live_lot.direction == "long"
+                else _decimal_to_plain(live_trail.trigger_price - preview_trail.trigger_price),
+                "status_before": live_trail.status,
+                "status_after": preview_trail.status,
+            }
+        )
+    return impacts
 
 
 def _decision_support_row(

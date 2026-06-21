@@ -700,6 +700,116 @@ def test_bracket_health_flags_pending_trailing_and_missing_take_profit():
     assert health["brackets"][0]["protective_trigger_price"] == "95.00"
 
 
+def test_bracket_coverage_reports_partial_exit_residuals():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "coverage-partial",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_targets": [
+                {"pct": "5", "close_pct": "40"},
+                {"pct": "10", "close_pct": "30"},
+            ],
+            "trailing_stop_pct": "4",
+            "trailing_stop_close_pct": "25",
+        },
+    )
+
+    response = client.get("/brackets/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    coverage = body["coverage"][0]
+    assert body["bracket_count"] == 1
+    assert coverage["signal_id"] == "coverage-partial"
+    assert coverage["take_profit_close_pct"] == "70"
+    assert coverage["trailing_stop_close_pct"] == "25"
+    assert coverage["protective_close_pct"] == "100"
+    assert coverage["residual_after_take_profit_pct"] == "30"
+    assert coverage["has_full_protective_exit"] is True
+    assert coverage["has_full_profit_exit"] is False
+    assert coverage["full_close_exit_count"] == 1
+    assert coverage["partial_close_exit_count"] == 3
+    assert coverage["coverage_notes"] == ["take_profit_plan_leaves_residual", "contains_partial_exit"]
+
+
+def test_bracket_preview_reports_close_impact_without_mutating_state():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "preview-close-impact",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "10",
+        },
+    )
+
+    response = client.post("/brackets/preview-close-impact/preview", json={"price": "110"})
+    active_after = client.get("/brackets/preview-close-impact").json()["active_exits"]
+
+    assert response.status_code == 200
+    impact = response.json()["impact"]
+    assert impact["mutates_state"] is False
+    assert impact["will_trigger"] is True
+    assert impact["triggered_kinds"] == ["take_profit"]
+    assert impact["will_close_bracket"] is True
+    assert impact["remaining_quantity_before"] == "1"
+    assert impact["remaining_quantity_after"] == "0"
+    assert impact["quantity_delta"] == "-1"
+    assert active_after
+
+
+def test_bracket_preview_reports_trailing_ratchet_impact_without_trigger():
+    app = create_app()
+    client = TestClient(app)
+
+    client.post(
+        "/webhooks/tradingview",
+        json={
+            "signal_id": "preview-ratchet-impact",
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "quote_amount": "100",
+            "price": "100",
+            "stop_loss_pct": "5",
+            "take_profit_pct": "30",
+            "trailing_stop_pct": "5",
+        },
+    )
+
+    response = client.post("/brackets/preview-ratchet-impact/preview", json={"price": "110"})
+
+    assert response.status_code == 200
+    impact = response.json()["impact"]
+    assert impact["will_trigger"] is False
+    assert impact["will_close_bracket"] is False
+    assert impact["remaining_quantity_before"] == "1"
+    assert impact["remaining_quantity_after"] == "1"
+    assert impact["trailing_ratchets"] == [
+        {
+            "signal_id": "preview-ratchet-impact",
+            "before_trigger_price": "95.00",
+            "after_trigger_price": "104.50",
+            "trigger_change": "9.50",
+            "status_before": "open",
+            "status_after": "open",
+        }
+    ]
+
+
 def test_lock_profit_moves_protective_exits_beyond_entry_without_live_execution():
     app = create_app()
     client = TestClient(app)
