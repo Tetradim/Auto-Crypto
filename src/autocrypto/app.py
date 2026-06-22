@@ -28,6 +28,7 @@ from .brackets import (
 )
 from .bracket_templates import apply_bracket_template, get_bracket_template, list_bracket_templates
 from .bot_event_bus import BotEvent, event_bus
+from .chrome_bridge import register_chrome_bridge_routes
 from .config import load_settings
 from .edge_actions import apply_edge_action
 from .engine import TradingEngine
@@ -164,6 +165,8 @@ def create_app(
     @app.get("/bus/events")
     def recent_bus_events(limit: int = 100, event_type: str | None = None) -> dict[str, Any]:
         return {"events": event_bus.recent(limit=limit, event_type=event_type)}
+
+    register_chrome_bridge_routes(app)
 
     @app.post("/bus/edge-actions")
     async def publish_edge_action(payload: dict[str, Any]) -> dict[str, Any]:
