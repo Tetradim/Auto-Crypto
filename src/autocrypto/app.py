@@ -35,24 +35,25 @@ from .chrome_bridge import register_chrome_bridge_routes
 from .config import load_settings
 from .edge_actions import apply_edge_action
 from .engine import TradingEngine
-from .exchange_adapters import generic_adapter_status, paper_adapter_status
+from .exchange_state import (
+    adapter_status_for_exchange,
+    capabilities_for_exchange,
+    exchange_integration_payload,
+    exchange_rows,
+    platform_state_rows,
+)
 from .exchanges.bitunix_adapter import (
     BitunixConfigurationError,
     BitunixRequestError,
     BitunixRestClient,
     bitunix_kline_candles,
-    bitunix_credentials_configured,
-    bitunix_live_execution_enabled,
     load_bitunix_credentials_from_env,
 )
 from .exchanges.ccxt_adapter import (
-    CcxtExchangeAdapter,
     CcxtNotInstalledError,
-    ExchangeCapabilities,
     list_ccxt_exchange_ids,
 )
 from .exchanges.order_planner import plan_bracket_execution
-from .exchanges.platform_registry import get_platform, platform_rows
 from .execution import ExecutionCostConfig, PaperExchange, build_exit_orders
 from .futures_risk import FuturesRiskConfig, FuturesTradeContext, assess_futures_trade
 from .intake import SignalIntakeService
@@ -413,35 +414,25 @@ def create_app(
 
     @app.get("/exchanges")
     def exchanges() -> dict[str, Any]:
-        exchange_rows = [_exchange_row("paper", "paper"), _bitunix_exchange_row()]
         try:
             ccxt_exchange_ids = list_ccxt_exchange_ids()
         except CcxtNotInstalledError:
-            return {"ccxt_available": False, "exchanges": exchange_rows}
+            return {"ccxt_available": False, "exchanges": exchange_rows(())}
 
-        exchange_rows.extend(_exchange_row(exchange_id, "ccxt") for exchange_id in ccxt_exchange_ids)
-        return {"ccxt_available": True, "exchanges": exchange_rows}
+        return {"ccxt_available": True, "exchanges": exchange_rows(ccxt_exchange_ids)}
 
     @app.get("/exchanges/platforms")
     def exchange_platforms() -> dict[str, Any]:
         try:
             ccxt_exchange_ids = set(list_ccxt_exchange_ids())
         except CcxtNotInstalledError:
-            return {"ccxt_available": False, "platforms": platform_rows(None)}
-        return {"ccxt_available": True, "platforms": platform_rows(ccxt_exchange_ids)}
+            return {"ccxt_available": False, "platforms": platform_state_rows(None)}
+        return {"ccxt_available": True, "platforms": platform_state_rows(ccxt_exchange_ids)}
 
     @app.get("/exchanges/{exchange_id}/capabilities")
     def exchange_capabilities(exchange_id: str) -> dict[str, Any]:
-        if exchange_id == "paper":
-            return {"capabilities": _paper_capabilities().to_dict()}
-        if exchange_id == "bitunix":
-            client = BitunixRestClient(credentials=load_bitunix_credentials_from_env())
-            return {"capabilities": client.capabilities().to_dict()}
-        platform = get_platform(exchange_id)
-        if platform and platform.ccxt_id:
-            exchange_id = platform.ccxt_id
         try:
-            capabilities = CcxtExchangeAdapter(exchange_id).capabilities()
+            capabilities = capabilities_for_exchange(exchange_id)
         except CcxtNotInstalledError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
@@ -450,63 +441,28 @@ def create_app(
 
     @app.get("/exchanges/{exchange_id}/adapter-status")
     def exchange_adapter_status(exchange_id: str) -> dict[str, Any]:
-        normalized = exchange_id.strip().lower()
-        if normalized == "paper":
-            status = paper_adapter_status(
+        try:
+            status = adapter_status_for_exchange(
+                exchange_id,
                 engine.exchange,
-                _paper_capabilities(),
                 equity=engine.account_state.equity,
             )
-            return {"adapter": status.to_dict()}
-        if normalized == "bitunix":
-            capabilities = BitunixRestClient(credentials=load_bitunix_credentials_from_env()).capabilities()
-            status = generic_adapter_status(
-                exchange_id="bitunix",
-                driver="bitunix-native",
-                capabilities=capabilities,
-                live_execution_enabled=bitunix_live_execution_enabled(),
-                funding_supported=True,
-            )
-            return {"adapter": status.to_dict()}
-        platform = get_platform(normalized)
-        ccxt_exchange_id = platform.ccxt_id if platform and platform.ccxt_id else normalized
-        try:
-            capabilities = CcxtExchangeAdapter(ccxt_exchange_id).capabilities()
         except CcxtNotInstalledError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return {
-            "adapter": generic_adapter_status(
-                exchange_id=ccxt_exchange_id,
-                driver="ccxt",
-                capabilities=capabilities,
-                live_execution_enabled=False,
-                funding_supported=capabilities.swap or capabilities.future,
-            ).to_dict()
-        }
+        return {"adapter": status.to_dict()}
 
     @app.get("/exchanges/{exchange_id}/integration")
     def exchange_integration(exchange_id: str) -> dict[str, Any]:
-        platform = get_platform(exchange_id)
-        if platform is None:
-            raise HTTPException(status_code=404, detail=f"unsupported platform: {exchange_id}")
-
         try:
             ccxt_exchange_ids = set(list_ccxt_exchange_ids())
         except CcxtNotInstalledError:
             ccxt_exchange_ids = None
-
-        payload: dict[str, Any] = {"platform": platform.to_dict(ccxt_exchange_ids=ccxt_exchange_ids)}
-        if platform.exchange_id == "bitunix":
-            payload["capabilities"] = BitunixRestClient(credentials=load_bitunix_credentials_from_env()).capabilities().to_dict()
-            return payload
-        if platform.ccxt_id and platform.driver_available(ccxt_exchange_ids):
-            try:
-                payload["capabilities"] = CcxtExchangeAdapter(platform.ccxt_id).capabilities().to_dict()
-            except (CcxtNotInstalledError, ValueError) as exc:
-                payload["capability_error"] = str(exc)
-        return payload
+        try:
+            return exchange_integration_payload(exchange_id, ccxt_exchange_ids)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/exchanges/bitunix/futures/tickers")
     def bitunix_futures_tickers(symbols: str | None = None) -> dict[str, Any]:
@@ -1730,7 +1686,7 @@ def create_app(
         payload = await request.json()
         try:
             signal = normalize_signal(payload, source="operator-plan")
-            capabilities = _capabilities_for_signal_exchange(signal.exchange)
+            capabilities = capabilities_for_exchange(signal.exchange)
         except SignalValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except CcxtNotInstalledError as exc:
@@ -2320,24 +2276,6 @@ def _decimal(value: Any, *, default: Decimal) -> Decimal:
         raise ValueError(f"invalid decimal: {value}") from exc
 
 
-def _paper_capabilities() -> ExchangeCapabilities:
-    return ExchangeCapabilities(
-        exchange_id="paper",
-        spot=True,
-        margin=False,
-        swap=False,
-        future=False,
-        option=False,
-        create_order=True,
-        cancel_order=False,
-        fetch_balance=False,
-        attached_stop_loss_take_profit=True,
-        oco_order=True,
-        trailing_order=True,
-        reduce_only=True,
-    )
-
-
 def _templated_signal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
@@ -2394,28 +2332,6 @@ def _strategy_signal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _capabilities_for_signal_exchange(exchange_id: str) -> ExchangeCapabilities:
-    normalized = exchange_id.strip().lower()
-    if normalized == "paper":
-        return _paper_capabilities()
-    if normalized == "bitunix":
-        return BitunixRestClient(credentials=load_bitunix_credentials_from_env()).capabilities()
-    platform = get_platform(normalized)
-    if platform and platform.ccxt_id:
-        normalized = platform.ccxt_id
-    return CcxtExchangeAdapter(normalized).capabilities()
-
-
-def _exchange_row(exchange_id: str, driver: str) -> dict[str, Any]:
-    return {
-        "exchange_id": exchange_id,
-        "driver": driver,
-        "driver_available": True,
-        "credentials_configured": False,
-        "live_execution_enabled": False,
-    }
-
-
 def _triggered_with_order_metadata(triggered: list[dict], orders: list[Any]) -> list[dict]:
     enriched: list[dict] = []
     order_index = 0
@@ -2452,15 +2368,6 @@ def _trigger_gap(triggered: dict, exit_order: Any) -> Decimal:
         return exit_order.trigger_price - fill_price
     return abs(fill_price - exit_order.trigger_price)
 
-
-def _bitunix_exchange_row() -> dict[str, Any]:
-    return {
-        "exchange_id": "bitunix",
-        "driver": "bitunix-native",
-        "driver_available": True,
-        "credentials_configured": bitunix_credentials_configured(),
-        "live_execution_enabled": bitunix_live_execution_enabled(),
-    }
 
 def _risk_config_to_dict(config: RiskConfig) -> dict[str, Any]:
     return {
