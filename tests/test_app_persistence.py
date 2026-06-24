@@ -11,6 +11,7 @@ def test_app_records_signal_order_and_audit_history(tmp_path):
     repo = SQLiteRepository(tmp_path / "app.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/webhooks/tradingview",
@@ -36,6 +37,7 @@ def test_app_records_signal_order_and_audit_history(tmp_path):
 def test_app_rejects_duplicate_signal_after_restart_with_same_repository(tmp_path):
     db_path = tmp_path / "restart.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     payload = {
         "signal_id": "restart-duplicate",
         "symbol": "ETHUSDT",
@@ -48,6 +50,7 @@ def test_app_rejects_duplicate_signal_after_restart_with_same_repository(tmp_pat
 
     first = first_client.post("/webhooks/tradingview", json=payload)
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     second = second_client.post("/webhooks/tradingview", json=payload)
 
     repo = SQLiteRepository(db_path)
@@ -66,6 +69,7 @@ def test_app_rejects_duplicate_signal_after_restart_with_same_repository(tmp_pat
 def test_app_rehydrates_paper_positions_and_brackets_from_order_history(tmp_path):
     db_path = tmp_path / "rehydrate.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -80,6 +84,7 @@ def test_app_rehydrates_paper_positions_and_brackets_from_order_history(tmp_path
     )
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
 
     assert second_client.get("/positions").json()["positions"][0]["quantity"] == "1.00000000"
     triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "105"})
@@ -97,6 +102,7 @@ def test_app_rehydrates_open_notional_for_risk_after_restart(tmp_path):
     db_path = tmp_path / "rehydrate_risk.sqlite3"
     risk = RiskConfig(max_order_notional=Decimal("500"), max_open_notional=Decimal("150"))
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path), risk_config=risk))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -109,6 +115,7 @@ def test_app_rehydrates_open_notional_for_risk_after_restart(tmp_path):
         },
     )
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path), risk_config=risk))
+    second_client.get("/ui")
 
     response = second_client.post(
         "/webhooks/tradingview",
@@ -129,6 +136,7 @@ def test_app_rehydrates_open_notional_for_risk_after_restart(tmp_path):
 def test_app_lists_and_amends_bracket_stop_with_audit(tmp_path):
     repo = SQLiteRepository(tmp_path / "bracket_amend.sqlite3")
     client = TestClient(create_app(repository=repo))
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -161,6 +169,7 @@ def test_app_lists_and_amends_bracket_stop_with_audit(tmp_path):
 def test_app_replays_bracket_stop_amendment_after_restart(tmp_path):
     db_path = tmp_path / "bracket_amend_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -176,6 +185,7 @@ def test_app_replays_bracket_stop_amendment_after_restart(tmp_path):
     first_client.post("/brackets/replay-stop-amend/stop", json={"trigger_price": "99"})
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     bracket = second_client.get("/brackets/replay-stop-amend").json()
     triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "99"})
 
@@ -188,6 +198,7 @@ def test_app_replays_bracket_stop_amendment_after_restart(tmp_path):
 def test_app_replays_trailing_stop_amendment_after_restart(tmp_path):
     db_path = tmp_path / "trailing_amend_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -209,6 +220,7 @@ def test_app_replays_trailing_stop_amendment_after_restart(tmp_path):
     loosened = first_client.post("/brackets/replay-trail-amend/trailing-stop", json={"trigger_price": "98"})
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     bracket = second_client.get("/brackets/replay-trail-amend").json()
     trailing_exit = next(exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "trailing_stop")
     triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "99"})
@@ -230,6 +242,7 @@ def test_app_replays_trailing_stop_amendment_after_restart(tmp_path):
 def test_app_replays_trailing_stop_mark_amendment_after_restart(tmp_path):
     db_path = tmp_path / "trailing_mark_amend_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -251,6 +264,7 @@ def test_app_replays_trailing_stop_mark_amendment_after_restart(tmp_path):
     )
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     bracket = second_client.get("/brackets/replay-trail-mark-amend").json()
     trailing_exit = next(exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "trailing_stop")
     triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "105.60"})
@@ -273,6 +287,7 @@ def test_app_replays_trailing_stop_mark_amendment_after_restart(tmp_path):
 def test_app_replays_take_profit_amendment_after_restart(tmp_path):
     db_path = tmp_path / "take_profit_amend_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -298,6 +313,7 @@ def test_app_replays_take_profit_amendment_after_restart(tmp_path):
     )
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     bracket = second_client.get("/brackets/replay-tp-amend").json()
     target_exits = [exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "take_profit"]
     triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "115"})
@@ -322,6 +338,7 @@ def test_app_replays_exact_initial_trailing_stop_price_after_restart(tmp_path):
     repo = SQLiteRepository(db_path)
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     payload = {
         "signal_id": "exact-trail-replay",
         "symbol": "SOL/USDT",
@@ -336,6 +353,7 @@ def test_app_replays_exact_initial_trailing_stop_price_after_restart(tmp_path):
 
     accepted = client.post("/webhooks/tradingview", json=payload)
     restarted = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    restarted.get("/ui")
     bracket = restarted.get("/brackets/exact-trail-replay").json()
     trailing_exit = next(exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "trailing_stop")
 
@@ -347,6 +365,7 @@ def test_app_replays_exact_initial_trailing_stop_price_after_restart(tmp_path):
 def test_app_replays_breakeven_amendment_after_restart(tmp_path):
     db_path = tmp_path / "breakeven_amend_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -363,6 +382,7 @@ def test_app_replays_breakeven_amendment_after_restart(tmp_path):
     amended = first_client.post("/brackets/replay-breakeven/breakeven", json={"reason": "operator lock"})
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     bracket = second_client.get("/brackets/replay-breakeven").json()
     triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "100"})
     stop_exit = next(exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "stop_loss")
@@ -381,6 +401,7 @@ def test_app_replays_breakeven_amendment_after_restart(tmp_path):
 def test_app_replays_profit_lock_amendment_after_restart(tmp_path):
     db_path = tmp_path / "profit_lock_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -397,6 +418,7 @@ def test_app_replays_profit_lock_amendment_after_restart(tmp_path):
     amended = first_client.post("/brackets/replay-profit-lock/lock-profit", json={"lock_profit_pct": "2"})
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     bracket = second_client.get("/brackets/replay-profit-lock").json()
     triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "102"})
     stop_exit = next(exit_order for exit_order in bracket["active_exits"] if exit_order["kind"] == "stop_loss")
@@ -416,6 +438,7 @@ def test_app_replays_profit_lock_amendment_after_restart(tmp_path):
 def test_app_closes_bracket_with_audit_and_replays_after_restart(tmp_path):
     db_path = tmp_path / "bracket_close_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -435,6 +458,7 @@ def test_app_closes_bracket_with_audit_and_replays_after_restart(tmp_path):
         json={"price": "106", "reason": "operator flattened risk"},
     )
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     brackets = second_client.get("/brackets").json()["brackets"]
     positions = second_client.get("/positions").json()["positions"]
     repo = SQLiteRepository(db_path)
@@ -455,6 +479,7 @@ def test_app_closes_bracket_with_audit_and_replays_after_restart(tmp_path):
 def test_app_closes_bracket_at_protective_exit_with_audit(tmp_path):
     db_path = tmp_path / "bracket_protective_close.sqlite3"
     client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -487,6 +512,7 @@ def test_app_closes_bracket_at_protective_exit_with_audit(tmp_path):
 def test_app_partially_closes_bracket_and_replays_remaining_exits_after_restart(tmp_path):
     db_path = tmp_path / "bracket_partial_close_replay.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    first_client.get("/ui")
     first_client.post(
         "/webhooks/tradingview",
         json={
@@ -505,6 +531,7 @@ def test_app_partially_closes_bracket_and_replays_remaining_exits_after_restart(
         json={"price": "106", "close_pct": "40", "reason": "operator scaled out"},
     )
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    second_client.get("/ui")
     bracket = second_client.get("/brackets/replay-partial-close").json()
     triggered = second_client.post("/market/price", json={"symbol": "SOLUSDT", "price": "110"})
     repo = SQLiteRepository(db_path)

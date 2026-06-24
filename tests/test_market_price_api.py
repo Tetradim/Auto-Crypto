@@ -11,6 +11,7 @@ def test_market_price_endpoint_triggers_paper_exit_and_audit_event(tmp_path):
     repo = SQLiteRepository(tmp_path / "market.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -37,6 +38,7 @@ def test_market_price_endpoint_reports_oca_canceled_siblings(tmp_path):
     repo = SQLiteRepository(tmp_path / "market_oca.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -93,6 +95,7 @@ def test_custom_oca_group_is_used_for_paper_bracket_legs_and_cancel_metadata(tmp
     repo = SQLiteRepository(tmp_path / "custom_oca.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -124,6 +127,7 @@ def test_market_price_metadata_reports_trigger_gap_for_price_overshoot(tmp_path)
     repo = SQLiteRepository(tmp_path / "trigger_gap.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -153,6 +157,7 @@ def test_market_price_metadata_prefers_nearest_trailing_stop_on_gap_through(tmp_
     repo = SQLiteRepository(tmp_path / "trailing_gap.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -188,6 +193,7 @@ def test_market_price_exit_reduces_open_notional_for_future_risk(tmp_path):
         risk_config=RiskConfig(max_order_notional=Decimal("500"), max_open_notional=Decimal("150")),
     )
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -224,6 +230,7 @@ def test_market_price_stop_loss_updates_daily_pnl_and_loss_streak(tmp_path):
         risk_config=RiskConfig(max_order_notional=Decimal("500"), max_consecutive_losses=1),
     )
     client = TestClient(app)
+    client.get("/ui")
     entry = client.post(
         "/webhooks/tradingview",
         json={
@@ -264,6 +271,7 @@ def test_market_price_preview_reports_trigger_without_mutating_paper_state(tmp_p
     repo = SQLiteRepository(tmp_path / "market_preview.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -293,6 +301,7 @@ def test_market_price_preview_reports_simulated_trailing_ratchet_without_mutatin
     repo = SQLiteRepository(tmp_path / "market_preview_trailing.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -341,6 +350,7 @@ def test_market_price_response_reports_applied_trailing_ratchet(tmp_path):
     repo = SQLiteRepository(tmp_path / "market_ratchet.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -375,6 +385,7 @@ def test_bracket_preview_reports_one_signal_trigger_distance_without_mutating_st
     repo = SQLiteRepository(tmp_path / "bracket_preview.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     for signal_id, take_profit_pct in [("preview-lot-one", "5"), ("preview-lot-two", "10")]:
         client.post(
             "/webhooks/tradingview",
@@ -411,6 +422,7 @@ def test_bracket_preview_reports_simulated_activation_snapshot_without_mutating_
     repo = SQLiteRepository(tmp_path / "bracket_preview_activation.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -451,6 +463,7 @@ def test_bracket_trailing_stop_preview_path_reports_step_ratchets_without_mutati
     repo = SQLiteRepository(tmp_path / "bracket_trailing_preview_path.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -492,6 +505,7 @@ def test_bracket_trailing_stop_preview_path_reports_activation_without_mutating_
     repo = SQLiteRepository(tmp_path / "bracket_trailing_activation_path.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -531,6 +545,7 @@ def test_bracket_list_includes_remaining_risk_summary(tmp_path):
     repo = SQLiteRepository(tmp_path / "bracket_summary.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -567,6 +582,7 @@ def test_bracket_breakeven_endpoint_moves_protective_exits_and_records_audit(tmp
     repo = SQLiteRepository(tmp_path / "bracket_breakeven.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -601,6 +617,7 @@ def test_bracket_cancel_endpoint_cancels_exits_and_records_audit(tmp_path):
     repo = SQLiteRepository(tmp_path / "bracket_cancel.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -637,6 +654,7 @@ def test_bracket_cancel_replays_from_persisted_order_history(tmp_path):
     repo = SQLiteRepository(db_path)
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
     client.post(
         "/webhooks/tradingview",
         json={
@@ -652,6 +670,7 @@ def test_bracket_cancel_replays_from_persisted_order_history(tmp_path):
     client.post("/brackets/replay-cancel-bracket/cancel", json={"reason": "operator cancel"})
 
     restarted_client = TestClient(create_app(repository=SQLiteRepository(db_path)))
+    restarted_client.get("/ui")
 
     assert restarted_client.get("/brackets/replay-cancel-bracket").status_code == 404
     assert restarted_client.post("/market/price", json={"symbol": "BTCUSDT", "price": "90"}).json()["triggered"] == []

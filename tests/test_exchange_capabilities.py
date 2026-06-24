@@ -14,6 +14,11 @@ def clear_bitunix_env(monkeypatch):
     monkeypatch.delenv("AUTO_CRYPTO_BITUNIX_LIVE_ENABLED", raising=False)
 
 
+def establish_operator_session(client):
+    response = client.get("/ui")
+    assert response.status_code == 200
+
+
 class FakeExchange:
     has = {
         "spot": True,
@@ -222,6 +227,34 @@ def test_exchanges_endpoint_marks_bitunix_credentials(monkeypatch):
     }
 
 
+def test_exchanges_endpoint_keeps_live_execution_locked_without_readiness_signoff(monkeypatch):
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_API_KEY", "configured-key")
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_SECRET_KEY", "configured-secret")
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_LIVE_ENABLED", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
+    monkeypatch.delenv("AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION", raising=False)
+    client = TestClient(create_app())
+
+    bitunix = next(row for row in client.get("/exchanges").json()["exchanges"] if row["exchange_id"] == "bitunix")
+
+    assert bitunix["live_execution_enabled"] is False
+
+
+def test_exchanges_endpoint_reports_live_execution_only_after_all_readiness_gates(monkeypatch):
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_API_KEY", "configured-key")
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_SECRET_KEY", "configured-secret")
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_LIVE_ENABLED", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
+    monkeypatch.setenv("AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION", "ENABLE LIVE CRYPTO TRADING")
+    client = TestClient(create_app())
+
+    bitunix = next(row for row in client.get("/exchanges").json()["exchanges"] if row["exchange_id"] == "bitunix")
+
+    assert bitunix["live_execution_enabled"] is True
+
+
 def test_bitunix_capabilities_endpoint_reports_native_adapter():
     client = TestClient(create_app())
 
@@ -248,6 +281,7 @@ def test_bitunix_capabilities_endpoint_reports_native_adapter():
 def test_bitunix_private_account_endpoint_requires_credentials(monkeypatch):
     clear_bitunix_env(monkeypatch)
     client = TestClient(create_app())
+    establish_operator_session(client)
 
     response = client.get("/exchanges/bitunix/futures/account")
 
@@ -277,8 +311,39 @@ def test_bitunix_private_account_endpoint_delegates_to_native_client(monkeypatch
 
     monkeypatch.setattr(app_module.BitunixRestClient, "get_futures_account", fake_account)
     client = TestClient(create_app())
+    establish_operator_session(client)
 
     response = client.get("/exchanges/bitunix/futures/account?margin_coin=USDT")
 
     assert response.status_code == 200
     assert response.json()["data"] == [{"marginCoin": "USDT"}]
+
+
+def test_bitunix_private_account_endpoint_requires_operator_auth_when_secret_configured(monkeypatch):
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_API_KEY", "configured-key")
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_SECRET_KEY", "configured-secret")
+
+    def fake_account(self, margin_coin="USDT"):
+        return {"code": 0, "data": [{"marginCoin": margin_coin}], "msg": "Success"}
+
+    monkeypatch.setattr(app_module.BitunixRestClient, "get_futures_account", fake_account)
+    client = TestClient(create_app(webhook_secret="top-secret"))
+
+    response = client.get("/exchanges/bitunix/futures/account?margin_coin=USDT")
+
+    assert response.status_code == 401
+
+
+def test_bitunix_private_account_endpoint_requires_operator_session_when_secret_not_configured(monkeypatch):
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_API_KEY", "configured-key")
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_SECRET_KEY", "configured-secret")
+
+    def fake_account(self, margin_coin="USDT"):
+        return {"code": 0, "data": [{"marginCoin": margin_coin}], "msg": "Success"}
+
+    monkeypatch.setattr(app_module.BitunixRestClient, "get_futures_account", fake_account)
+    client = TestClient(create_app())
+
+    response = client.get("/exchanges/bitunix/futures/account?margin_coin=USDT")
+
+    assert response.status_code == 401

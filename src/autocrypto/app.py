@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import secrets
 from copy import deepcopy
 from collections.abc import Callable
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -32,6 +35,7 @@ from .chrome_bridge import register_chrome_bridge_routes
 from .config import load_settings
 from .edge_actions import apply_edge_action
 from .engine import TradingEngine
+from .exchange_adapters import generic_adapter_status, paper_adapter_status
 from .exchanges.bitunix_adapter import (
     BitunixConfigurationError,
     BitunixRequestError,
@@ -50,9 +54,27 @@ from .exchanges.ccxt_adapter import (
 from .exchanges.order_planner import plan_bracket_execution
 from .exchanges.platform_registry import get_platform, platform_rows
 from .execution import ExecutionCostConfig, PaperExchange, build_exit_orders
+from .futures_risk import FuturesRiskConfig, FuturesTradeContext, assess_futures_trade
 from .intake import SignalIntakeService
+from .market_state import MarketStatePolicy, MarketStateSnapshot, evaluate_market_state
+from .order_recorder import cooldown_state_key, save_order_with_runtime_state
+from .protections import (
+    ProtectionRule,
+    ProtectionState,
+    evaluate_protections,
+    protection_rule_from_dict,
+    protection_state_from_dict,
+)
 from .repository import SQLiteRepository
 from .risk import AccountState, RiskConfig, RiskDecision, evaluate_signal
+from .runtime_controls import (
+    RUNTIME_CONFIG_KEY,
+    runtime_config as _runtime_config,
+    runtime_config_from_payload as _runtime_config_from_payload,
+    runtime_control_summary as _runtime_control_summary,
+    protection_state as _protection_state,
+    save_protection_state as _save_protection_state,
+)
 from .security import (
     InMemoryWebhookReplayStore,
     WebhookReplayError,
@@ -60,8 +82,21 @@ from .security import (
     verify_webhook_signature,
 )
 from .signals import CryptoSignal, SignalValidationError, normalize_signal, normalize_symbol
+from .scalper import (
+    PriceBand,
+    RebracketRuntimeState,
+    ScalperBracketConfig,
+    plan_rebracket,
+    reentry_cooldown_remaining,
+    scalper_signal_payload,
+)
 from .strategy_presets import apply_strategy_preset, get_strategy_preset, list_strategy_presets
 from .text_signals import parse_text_signal
+from .trade_decision import RuntimeControlDecision
+
+
+OPERATOR_SESSION_COOKIE = "auto_crypto_operator_session"
+SCALPER_STATE_PREFIX = "scalper:"
 
 
 def create_app(
@@ -94,13 +129,30 @@ def create_app(
         account_state=account_state,
     )
     secret = webhook_secret if webhook_secret is not None else os.getenv("AUTO_CRYPTO_WEBHOOK_SECRET")
+    operator_session_token = secrets.token_urlsafe(32)
     replay_store = InMemoryWebhookReplayStore()
+
+    def runtime_pre_trade_decision(signal: CryptoSignal) -> RuntimeControlDecision:
+        summary = _runtime_control_summary(signal, engine=engine, repository=repository)
+        return RuntimeControlDecision(
+            reason_codes=list(summary["reason_codes"]),
+            approval_required=bool(summary["approval_required"]) and not signal.reduce_only,
+            metadata=summary,
+        )
+
     intake = SignalIntakeService(
         engine=engine,
         approvals=ApprovalQueue(),
         repository=repository,
         require_approval=require_approval,
+        pre_trade_decision=runtime_pre_trade_decision,
     )
+
+    def signal_preview_with_runtime_controls(signal: CryptoSignal) -> dict[str, Any]:
+        preview = _signal_preview(signal, engine, require_approval=require_approval)
+        summary = _runtime_control_summary(signal, engine=engine, repository=repository)
+        _merge_runtime_controls(preview, summary)
+        return preview
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -118,7 +170,17 @@ def create_app(
         index_path = static_dir / "index.html"
         if not index_path.exists():
             raise HTTPException(status_code=404, detail="operator UI is not installed")
-        return FileResponse(index_path)
+        response = FileResponse(index_path)
+        response.set_cookie(
+            OPERATOR_SESSION_COOKIE,
+            operator_session_token,
+            httponly=True,
+            max_age=12 * 60 * 60,
+            path="/",
+            samesite="strict",
+            secure=False,
+        )
+        return response
 
     @app.get("/ui/state")
     def ui_state() -> dict[str, Any]:
@@ -144,14 +206,66 @@ def create_app(
             "approvals": intake.list_approvals(),
             "audit": [event.to_dict() for event in repository.list_audit()] if repository else [],
             "active_exits": _active_exits_to_dict(engine.exchange.lots),
+            "runtime": _runtime_config(repository),
+            "protections": _protection_state(repository).to_dict(),
         }
 
     @app.get("/control/status")
     def control_status() -> dict[str, Any]:
         return {"halted": engine.halted, "reason": engine.halt_reason}
 
+    def verify_signed_request(request: Request, body: bytes) -> None:
+        try:
+            verify_webhook_signature(
+                secret=secret,
+                body=body,
+                timestamp=request.headers.get("x-auto-crypto-timestamp"),
+                signature=request.headers.get("x-auto-crypto-signature"),
+                clock=webhook_clock,
+                tolerance_seconds=webhook_tolerance_seconds,
+                replay_store=replay_store,
+            )
+        except WebhookSignatureError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except WebhookReplayError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def _same_origin_operator_request(request: Request) -> bool:
+        host = (request.headers.get("host") or "").lower()
+        for header in ("origin", "referer"):
+            raw_value = request.headers.get(header)
+            if not raw_value:
+                continue
+            return (urlparse(raw_value).netloc or "").lower() == host
+        return True
+
+    def verify_operator_session_request(request: Request) -> bool:
+        session_cookie = request.cookies.get(OPERATOR_SESSION_COOKIE)
+        if not session_cookie or not secrets.compare_digest(session_cookie, operator_session_token):
+            return False
+        if not _same_origin_operator_request(request):
+            raise HTTPException(status_code=403, detail="operator session origin mismatch")
+        return True
+
+    async def verify_signed_operator_request(request: Request) -> None:
+        if verify_operator_session_request(request):
+            return
+        if not secret:
+            raise HTTPException(status_code=401, detail="operator session or webhook secret is required")
+        body = await request.body()
+        verify_signed_request(request, body)
+
+    async def verify_private_exchange_request(request: Request) -> None:
+        if verify_operator_session_request(request):
+            return
+        if not secret:
+            raise HTTPException(status_code=401, detail="operator session is required for private exchange data")
+        body = await request.body()
+        verify_signed_request(request, body)
+
     @app.post("/bus/events")
-    async def publish_bus_event(event: BotEvent) -> dict[str, Any]:
+    async def publish_bus_event(event: BotEvent, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         accepted = event_bus.publish(event)
         result: dict[str, Any] | None = None
         if event.event_type == "edge.action":
@@ -169,7 +283,8 @@ def create_app(
     register_chrome_bridge_routes(app)
 
     @app.post("/bus/edge-actions")
-    async def publish_edge_action(payload: dict[str, Any]) -> dict[str, Any]:
+    async def publish_edge_action(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         event = event_bus.publish(
             BotEvent(
                 event_type="edge.action",
@@ -185,6 +300,7 @@ def create_app(
 
     @app.post("/control/halt")
     async def halt(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         reason = str(payload.get("reason") or "manual halt")
         engine.halt(reason)
@@ -193,27 +309,74 @@ def create_app(
         return {"halted": True, "reason": reason}
 
     @app.post("/control/resume")
-    def resume() -> dict[str, Any]:
+    async def resume(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         engine.resume()
         if repository:
             repository.record_audit("trading.resumed", {})
         return {"halted": False, "reason": ""}
 
-    def verify_signed_request(request: Request, body: bytes) -> None:
+    @app.get("/runtime/config")
+    def runtime_config() -> dict[str, Any]:
+        return {"config": _runtime_config(repository)}
+
+    @app.post("/runtime/config")
+    async def update_runtime_config(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
+        payload = await request.json()
         try:
-            verify_webhook_signature(
-                secret=secret,
-                body=body,
-                timestamp=request.headers.get("x-auto-crypto-timestamp"),
-                signature=request.headers.get("x-auto-crypto-signature"),
-                clock=webhook_clock,
-                tolerance_seconds=webhook_tolerance_seconds,
-                replay_store=replay_store,
+            config = _runtime_config_from_payload(payload, existing=_runtime_config(repository))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if repository:
+            repository.set_runtime_state(RUNTIME_CONFIG_KEY, config)
+            repository.record_audit("runtime.config_updated", config)
+        return {"config": config}
+
+    @app.get("/protections")
+    def protections() -> dict[str, Any]:
+        state = _protection_state(repository)
+        return {"state": state.to_dict(), "active_rules": [rule.to_dict() for rule in state.active_rules()]}
+
+    @app.post("/protections/rules")
+    async def set_protection_rule(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
+        payload = await request.json()
+        payload.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+        try:
+            rule = protection_rule_from_dict(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        state = _protection_state(repository).with_rule(rule)
+        if repository:
+            _save_protection_state(repository, state)
+            repository.record_audit("protection.rule_set", {"rule": rule.to_dict()})
+        return {"rule": rule.to_dict(), "state": state.to_dict()}
+
+    @app.delete("/protections/rules/{rule_id}")
+    async def delete_protection_rule(rule_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
+        state = _protection_state(repository).without_rule(rule_id)
+        if repository:
+            _save_protection_state(repository, state)
+            repository.record_audit("protection.rule_deleted", {"rule_id": rule_id})
+        return {"state": state.to_dict()}
+
+    @app.post("/protections/preview")
+    async def protection_preview(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            signal_payload = payload.get("signal") if isinstance(payload.get("signal"), dict) else payload
+            signal = normalize_signal(signal_payload, source="operator-protection-preview")
+            state = (
+                protection_state_from_dict(payload.get("protections"))
+                if isinstance(payload.get("protections"), dict)
+                else _protection_state(repository)
             )
-        except WebhookSignatureError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        except WebhookReplayError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            decision = evaluate_protections(signal, state)
+        except (SignalValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"signal": _signal_to_dict(signal), "protections": decision.to_dict()}
 
     @app.post("/webhooks/tradingview")
     async def tradingview_webhook(request: Request) -> dict[str, Any]:
@@ -285,6 +448,44 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"capabilities": capabilities.to_dict()}
 
+    @app.get("/exchanges/{exchange_id}/adapter-status")
+    def exchange_adapter_status(exchange_id: str) -> dict[str, Any]:
+        normalized = exchange_id.strip().lower()
+        if normalized == "paper":
+            status = paper_adapter_status(
+                engine.exchange,
+                _paper_capabilities(),
+                equity=engine.account_state.equity,
+            )
+            return {"adapter": status.to_dict()}
+        if normalized == "bitunix":
+            capabilities = BitunixRestClient(credentials=load_bitunix_credentials_from_env()).capabilities()
+            status = generic_adapter_status(
+                exchange_id="bitunix",
+                driver="bitunix-native",
+                capabilities=capabilities,
+                live_execution_enabled=bitunix_live_execution_enabled(),
+                funding_supported=True,
+            )
+            return {"adapter": status.to_dict()}
+        platform = get_platform(normalized)
+        ccxt_exchange_id = platform.ccxt_id if platform and platform.ccxt_id else normalized
+        try:
+            capabilities = CcxtExchangeAdapter(ccxt_exchange_id).capabilities()
+        except CcxtNotInstalledError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "adapter": generic_adapter_status(
+                exchange_id=ccxt_exchange_id,
+                driver="ccxt",
+                capabilities=capabilities,
+                live_execution_enabled=False,
+                funding_supported=capabilities.swap or capabilities.future,
+            ).to_dict()
+        }
+
     @app.get("/exchanges/{exchange_id}/integration")
     def exchange_integration(exchange_id: str) -> dict[str, Any]:
         platform = get_platform(exchange_id)
@@ -337,7 +538,8 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/exchanges/bitunix/futures/account")
-    def bitunix_futures_account(margin_coin: str = "USDT") -> dict[str, Any]:
+    async def bitunix_futures_account(request: Request, margin_coin: str = "USDT") -> dict[str, Any]:
+        await verify_private_exchange_request(request)
         try:
             return BitunixRestClient(credentials=load_bitunix_credentials_from_env()).get_futures_account(margin_coin)
         except BitunixConfigurationError as exc:
@@ -377,8 +579,186 @@ def create_app(
             "account": _account_state_to_dict(engine.account_state),
         }
 
+    @app.post("/scalper/rebracket/preview")
+    async def scalper_rebracket_preview(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            _symbol, decision, suggested_signal, _state_payload = _scalper_rebracket_payload(
+                payload,
+                repository=None,
+            )
+        except (SignalValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "decision": decision.to_dict(),
+            "suggested_signal": suggested_signal,
+            "source": "sentinel_pulse_scalper",
+        }
+
+    @app.get("/scalper/state/{symbol:path}")
+    def scalper_state(symbol: str) -> dict[str, Any]:
+        try:
+            normalized_symbol = normalize_symbol(symbol)
+        except SignalValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        state = _scalper_state(repository, normalized_symbol)
+        if state is None:
+            return {"symbol": normalized_symbol, "configured": False}
+        return {"symbol": normalized_symbol, "configured": True, **state}
+
+    @app.post("/scalper/rebracket/apply")
+    async def scalper_rebracket_apply(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
+        payload = await request.json()
+        try:
+            symbol, decision, suggested_signal, state_payload = _scalper_rebracket_payload(
+                payload,
+                repository=repository,
+            )
+        except (SignalValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if decision.should_rebracket and decision.new_band is not None and repository:
+            repository.set_runtime_state(_scalper_state_key(symbol), state_payload)
+            repository.record_audit(
+                "scalper.rebracket_applied",
+                {"symbol": symbol, "decision": decision.to_dict()},
+            )
+        return {
+            "decision": decision.to_dict(),
+            "suggested_signal": suggested_signal,
+            "state": state_payload if decision.should_rebracket else _scalper_state(repository, symbol),
+            "mutates_exchange_orders": False,
+        }
+
+    @app.post("/scalper/rebracket/revert")
+    async def scalper_rebracket_revert(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
+        payload = await request.json()
+        try:
+            symbol = normalize_symbol(payload.get("symbol") or payload.get("ticker") or payload.get("pair"))
+        except SignalValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        state = _scalper_state(repository, symbol)
+        if state is None:
+            raise HTTPException(status_code=404, detail="scalper state not found")
+        previous_band = state.get("previous_band")
+        current_band = state.get("band")
+        if not isinstance(previous_band, dict) or not isinstance(current_band, dict):
+            raise HTTPException(status_code=409, detail="previous scalper band is not available")
+        reverted = {
+            **state,
+            "band": previous_band,
+            "previous_band": current_band,
+            "reverted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if repository:
+            repository.set_runtime_state(_scalper_state_key(symbol), reverted)
+            repository.record_audit("scalper.rebracket_reverted", {"symbol": symbol, "band": previous_band})
+        return {"symbol": symbol, "band": previous_band, "state": reverted, "mutates_exchange_orders": False}
+
+    @app.post("/futures/risk/preview")
+    async def futures_risk_preview(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        config_payload = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+        defaults = FuturesRiskConfig()
+
+        def config_value(*names: str) -> Any:
+            for name in names:
+                if name in config_payload:
+                    return config_payload[name]
+                if name in payload:
+                    return payload[name]
+            return None
+
+        try:
+            symbol = normalize_symbol(payload.get("symbol") or payload.get("ticker") or payload.get("pair"))
+            context = FuturesTradeContext(
+                symbol=symbol,
+                side=str(payload.get("side") or ""),
+                entry_price=_positive_decimal(payload.get("entry_price") or payload.get("price")),
+                stop_loss_price=_positive_decimal(payload.get("stop_loss_price") or payload.get("stop_price")),
+                notional=_positive_decimal(payload.get("notional") or payload.get("quote_amount")),
+                leverage=_positive_decimal(payload.get("leverage")),
+                maintenance_margin_pct=_decimal(
+                    payload.get("maintenance_margin_pct"),
+                    default=Decimal("0.5"),
+                ),
+                funding_rate_bps=_decimal(payload.get("funding_rate_bps"), default=Decimal("0")),
+                minutes_to_funding=_optional_int(payload.get("minutes_to_funding")),
+            )
+            config = FuturesRiskConfig(
+                max_leverage=_decimal(config_value("max_leverage"), default=defaults.max_leverage),
+                min_liquidation_buffer_pct=_decimal(
+                    config_value("min_liquidation_buffer_pct"),
+                    default=defaults.min_liquidation_buffer_pct,
+                ),
+                max_adverse_funding_rate_bps=_decimal(
+                    config_value("max_adverse_funding_rate_bps", "max_funding_rate_bps"),
+                    default=defaults.max_adverse_funding_rate_bps,
+                ),
+                funding_window_minutes=_optional_int(config_value("funding_window_minutes"))
+                or defaults.funding_window_minutes,
+            )
+            result = assess_futures_trade(context, config)
+        except (SignalValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {"symbol": symbol, **result.to_dict()}
+
+    @app.post("/market/state/preview")
+    async def market_state_preview(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        policy_payload = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+        defaults = MarketStatePolicy()
+
+        def policy_value(*names: str) -> Any:
+            for name in names:
+                if name in policy_payload:
+                    return policy_payload[name]
+                if name in payload:
+                    return payload[name]
+            return None
+
+        try:
+            snapshot = MarketStateSnapshot(
+                volatility_pct=_decimal(payload.get("volatility_pct"), default=Decimal("0")),
+                spread_bps=_decimal(payload.get("spread_bps"), default=Decimal("0")),
+                depth_notional=_decimal(payload.get("depth_notional"), default=Decimal("0")),
+                funding_rate_bps=_decimal(payload.get("funding_rate_bps"), default=Decimal("0")),
+                minutes_to_funding=_optional_int(payload.get("minutes_to_funding")),
+                liquidation_buffer_pct=_optional_positive_decimal(payload.get("liquidation_buffer_pct")),
+                data_stale_seconds=_optional_int(payload.get("data_stale_seconds")) or 0,
+                exchange_status=str(payload.get("exchange_status") or "ok"),
+            )
+            policy = MarketStatePolicy(
+                max_normal_volatility_pct=_decimal(
+                    policy_value("max_normal_volatility_pct"),
+                    default=defaults.max_normal_volatility_pct,
+                ),
+                max_spread_bps=_decimal(policy_value("max_spread_bps"), default=defaults.max_spread_bps),
+                min_depth_notional=_decimal(
+                    policy_value("min_depth_notional"),
+                    default=defaults.min_depth_notional,
+                ),
+                funding_window_minutes=_optional_int(policy_value("funding_window_minutes"))
+                or defaults.funding_window_minutes,
+                min_liquidation_buffer_pct=_decimal(
+                    policy_value("min_liquidation_buffer_pct"),
+                    default=defaults.min_liquidation_buffer_pct,
+                ),
+                data_stale_after_seconds=_optional_int(policy_value("data_stale_after_seconds"))
+                or defaults.data_stale_after_seconds,
+            )
+            state = evaluate_market_state(snapshot, policy)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return state.to_dict()
+
     @app.post("/market/price")
     async def market_price(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         symbol, price, include_order_metadata = await _market_price_payload(request)
         order_offset = len(engine.exchange.orders)
         before_lots = deepcopy(engine.exchange.lots)
@@ -390,7 +770,7 @@ def create_app(
         )
         if repository:
             for order in engine.exchange.orders[order_offset:]:
-                repository.save_order(order)
+                save_order_with_runtime_state(repository, order)
             if update.triggered:
                 repository.record_audit(
                     "exit.triggered",
@@ -733,6 +1113,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/stop")
     async def amend_bracket_stop(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             trigger_price = _positive_decimal(payload.get("trigger_price") or payload.get("stop_loss_price"))
@@ -744,7 +1125,7 @@ def create_app(
             raise HTTPException(status_code=409, detail="active bracket not found or stop would loosen risk")
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.stop_amended",
                 {
@@ -774,6 +1155,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/trailing-stop")
     async def amend_bracket_trailing_stop(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             trigger_price = _positive_decimal(payload.get("trigger_price") or payload.get("trailing_stop_price"))
@@ -785,7 +1167,7 @@ def create_app(
             raise HTTPException(status_code=409, detail="active trailing stop not found or amendment would loosen risk")
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.trailing_stop_amended",
                 {
@@ -815,6 +1197,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/trailing-stop/mark")
     async def tighten_bracket_trailing_stop_to_mark(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             mark_price = _positive_decimal(payload.get("mark_price") or payload.get("price"))
@@ -829,7 +1212,7 @@ def create_app(
             )
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.trailing_stop_mark_amended",
                 {
@@ -860,6 +1243,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/take-profit")
     async def amend_bracket_take_profit(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             trigger_price = _positive_decimal(payload.get("trigger_price") or payload.get("take_profit_price"))
@@ -880,7 +1264,7 @@ def create_app(
             )
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.take_profit_amended",
                 {
@@ -911,6 +1295,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/breakeven")
     async def move_bracket_to_breakeven(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         reason = str(payload.get("reason") or "manual move protective exits to breakeven")
         order = engine.exchange.move_bracket_to_breakeven(signal_id, reason=reason)
@@ -921,7 +1306,7 @@ def create_app(
             )
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.breakeven_amended",
                 {
@@ -951,6 +1336,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/lock-profit")
     async def lock_bracket_profit(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             lock_profit_pct = _positive_decimal(payload.get("lock_profit_pct") or payload.get("profit_lock_pct"))
@@ -965,7 +1351,7 @@ def create_app(
             )
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.profit_locked",
                 {
@@ -997,6 +1383,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/cancel")
     async def cancel_bracket(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         reason = str(payload.get("reason") or "manual bracket cancel")
         order = engine.exchange.cancel_bracket(signal_id, reason=reason)
@@ -1004,7 +1391,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="active bracket not found")
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.canceled",
                 {
@@ -1033,6 +1420,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/close")
     async def close_bracket(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             price = _positive_decimal(payload.get("price") or payload.get("mark_price"))
@@ -1069,7 +1457,7 @@ def create_app(
                 engine.account_state.consecutive_losses = 0
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.closed",
                 {
@@ -1103,6 +1491,7 @@ def create_app(
 
     @app.post("/brackets/{signal_id}/close-protective")
     async def close_bracket_at_protective_exit(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             close_pct = _optional_positive_decimal(payload.get("close_pct"))
@@ -1137,7 +1526,7 @@ def create_app(
                 engine.account_state.consecutive_losses = 0
         engine.account_state.open_notional = engine.exchange.open_notional()
         if repository:
-            repository.save_order(order)
+            save_order_with_runtime_state(repository, order)
             repository.record_audit(
                 "bracket.protective_closed",
                 {
@@ -1174,7 +1563,8 @@ def create_app(
         return {"pending": intake.list_approvals()}
 
     @app.post("/approvals/{signal_id}/approve")
-    def approve_signal(signal_id: str) -> dict[str, Any]:
+    async def approve_signal(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         result = intake.approve(signal_id)
         if result is None:
             raise HTTPException(status_code=404, detail="pending signal not found")
@@ -1182,6 +1572,7 @@ def create_app(
 
     @app.post("/approvals/{signal_id}/reject")
     async def reject_signal(signal_id: str, request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         reason = str(payload.get("reason") or "")
         result = intake.reject(signal_id, reason)
@@ -1251,10 +1642,11 @@ def create_app(
             signal = parse_text_signal(str(payload.get("message") or ""), source="operator-preview")
         except SignalValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _signal_preview(signal, engine, require_approval=require_approval)
+        return signal_preview_with_runtime_controls(signal)
 
     @app.post("/signals/submit-text")
     async def submit_text(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             signal = parse_text_signal(str(payload.get("message") or ""), source="operator-ui")
@@ -1264,6 +1656,7 @@ def create_app(
 
     @app.post("/signals/submit")
     async def submit_signal(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             signal = normalize_signal(payload, source="operator-ui")
@@ -1278,7 +1671,7 @@ def create_app(
             signal = normalize_signal(payload, source="operator-preview")
         except SignalValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _signal_preview(signal, engine, require_approval=require_approval)
+        return signal_preview_with_runtime_controls(signal)
 
     @app.post("/signals/preview-template")
     async def preview_template_signal(request: Request) -> dict[str, Any]:
@@ -1290,7 +1683,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        preview = _signal_preview(signal, engine, require_approval=require_approval)
+        preview = signal_preview_with_runtime_controls(signal)
         preview["template"] = get_bracket_template(str(templated_payload["bracket_template"])).to_dict()
         preview["merged_signal_payload"] = templated_payload
         preview["paper_only"] = True
@@ -1306,7 +1699,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        preview = _signal_preview(signal, engine, require_approval=require_approval)
+        preview = signal_preview_with_runtime_controls(signal)
         preview["strategy_preset"] = get_strategy_preset(str(preset_payload["strategy_preset"])).to_dict()
         bracket_template_name = preset_payload.get("bracket_template")
         if bracket_template_name:
@@ -1318,6 +1711,7 @@ def create_app(
 
     @app.post("/signals/submit-template")
     async def submit_template_signal(request: Request) -> dict[str, Any]:
+        await verify_signed_operator_request(request)
         payload = await request.json()
         try:
             templated_payload = _templated_signal_payload(payload)
@@ -1523,6 +1917,144 @@ def create_app_from_env() -> FastAPI:
 app = create_app()
 
 
+def _merge_runtime_controls(preview: dict[str, Any], summary: dict[str, Any]) -> None:
+    preview["protections"] = summary["protections"]
+    preview["reentry_cooldown"] = summary["reentry_cooldown"]
+    if summary["market_state"] is not None:
+        preview["market_state"] = summary["market_state"]
+    if summary["futures_risk"] is not None:
+        preview["futures_risk"] = summary["futures_risk"]
+    preview["advisory_risk"] = summary["advisory_risk"]
+
+    reason_codes = list(summary["reason_codes"])
+    if reason_codes:
+        existing = list(preview["risk"]["reason_codes"])
+        _extend_unique(existing, reason_codes)
+        preview["risk"]["reason_codes"] = existing
+        preview["risk"]["approved"] = False
+        preview["execution"]["next_status"] = "rejected"
+        preview["execution"]["would_place_order"] = False
+        return
+
+    if summary["approval_required"]:
+        preview["execution"]["next_status"] = "approval_required"
+        preview["execution"]["approval_required"] = True
+        preview["execution"]["would_place_order"] = False
+
+
+def _scalper_state_key(symbol: str) -> str:
+    return f"{SCALPER_STATE_PREFIX}{symbol}"
+
+
+def _scalper_state(repository: SQLiteRepository | None, symbol: str) -> dict[str, Any] | None:
+    if repository is None:
+        return None
+    return repository.get_runtime_state(_scalper_state_key(symbol))
+
+
+def _scalper_rebracket_payload(
+    payload: dict[str, Any],
+    *,
+    repository: SQLiteRepository | None,
+) -> tuple[str, Any, dict[str, Any] | None, dict[str, Any]]:
+    symbol = normalize_symbol(payload.get("symbol") or payload.get("ticker") or payload.get("pair"))
+    existing = _scalper_state(repository, symbol) or {}
+    band_payload = existing.get("band") if isinstance(existing.get("band"), dict) else {}
+    band = PriceBand(
+        lower=_positive_decimal(payload.get("lower_price") or payload.get("buy_target") or band_payload.get("lower")),
+        upper=_positive_decimal(payload.get("upper_price") or payload.get("sell_target") or band_payload.get("upper")),
+    )
+    config = _scalper_config_from_payload(payload, default_spread=band.width)
+    recent_source = payload.get("recent_prices", existing.get("recent_prices", []))
+    recent_prices = tuple(_positive_decimal(value) for value in recent_source if value is not None)
+    decision = plan_rebracket(
+        symbol=symbol,
+        price=_positive_decimal(payload.get("price") or payload.get("mark_price")),
+        band=band,
+        config=config,
+        state=RebracketRuntimeState(
+            recent_prices=recent_prices,
+            last_rebracket_at=_optional_datetime(existing.get("last_rebracket_at")),
+        ),
+        now=_optional_datetime(payload.get("now")),
+        position_open=_truthy(payload.get("position_open")),
+    )
+    side = str(payload.get("side") or "buy")
+    suggested_signal = (
+        scalper_signal_payload(
+            symbol,
+            side,
+            decision.new_band,
+            quote_amount=_optional_positive_decimal(payload.get("quote_amount")),
+            base_amount=_optional_positive_decimal(payload.get("base_amount") or payload.get("quantity")),
+            risk_amount=_optional_positive_decimal(payload.get("risk_amount")),
+            risk_pct=_optional_positive_decimal(payload.get("risk_pct")),
+            stop_distance=_optional_positive_decimal(payload.get("stop_distance") or payload.get("stop_loss_distance")),
+            exchange=str(payload.get("exchange") or "paper").strip().lower(),
+            market_type=str(payload.get("market_type") or "swap").strip().lower(),
+        )
+        if decision.new_band is not None
+        else None
+    )
+    persisted_band = decision.new_band or band
+    state_payload = {
+        "symbol": symbol,
+        "band": persisted_band.to_dict(),
+        "previous_band": decision.previous_band.to_dict(),
+        "recent_prices": [_decimal_to_plain(price) for price in decision.recent_prices],
+        "last_rebracket_at": decision.decided_at.isoformat() if decision.decided_at else None,
+        "config": _scalper_config_to_dict(config),
+    }
+    return symbol, decision, suggested_signal, state_payload
+
+
+def _scalper_config_from_payload(payload: dict[str, Any], *, default_spread: Decimal) -> ScalperBracketConfig:
+    config_payload = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+
+    def config_value(*names: str) -> Any:
+        for name in names:
+            if name in config_payload:
+                return config_payload[name]
+            if name in payload:
+                return payload[name]
+        return None
+
+    return ScalperBracketConfig(
+        threshold=_decimal(config_value("threshold", "rebracket_threshold"), default=ScalperBracketConfig.threshold),
+        min_drift=_decimal(config_value("min_drift", "rebracket_min_drift"), default=ScalperBracketConfig.min_drift),
+        spread=_decimal(config_value("spread", "rebracket_spread"), default=default_spread),
+        buffer=_decimal(config_value("buffer", "rebracket_buffer"), default=ScalperBracketConfig.buffer),
+        cooldown_seconds=_optional_int(config_value("cooldown_seconds", "rebracket_cooldown")) or 0,
+        lookback=_optional_int(config_value("lookback", "rebracket_lookback")) or ScalperBracketConfig.lookback,
+        price_increment=_decimal(
+            config_value("price_increment", "tick_size"),
+            default=ScalperBracketConfig.price_increment,
+        ),
+    )
+
+
+def _scalper_config_to_dict(config: ScalperBracketConfig) -> dict[str, Any]:
+    return {
+        "threshold": _decimal_to_plain(config.threshold),
+        "min_drift": _decimal_to_plain(config.min_drift),
+        "spread": _decimal_to_plain(config.spread),
+        "buffer": _decimal_to_plain(config.buffer),
+        "cooldown_seconds": config.cooldown_seconds,
+        "lookback": config.lookback,
+        "price_increment": _decimal_to_plain(config.price_increment),
+    }
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
+
+
+def _extend_unique(values: list[str], additions: list[str]) -> None:
+    for value in additions:
+        _append_unique(values, value)
+
+
 def _positive_decimal(value: Any) -> Decimal:
     if value is None or value == "":
         raise ValueError("price is required")
@@ -1545,6 +2077,17 @@ def _optional_positive_decimal(value: Any) -> Decimal | None:
     if parsed <= 0:
         raise ValueError("decimal value must be positive")
     return parsed
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid datetime: {value}") from exc
 
 
 def _truthy(value: Any) -> bool:

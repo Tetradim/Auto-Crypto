@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from ..config import live_execution_enabled_from_env
 from .ccxt_adapter import ExchangeCapabilities
 
 
@@ -208,7 +209,7 @@ def bitunix_credentials_configured() -> bool:
 
 
 def bitunix_live_execution_enabled() -> bool:
-    return os.getenv("AUTO_CRYPTO_BITUNIX_LIVE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    return live_execution_enabled_from_env("AUTO_CRYPTO_BITUNIX_LIVE_ENABLED")
 
 
 def compact_json(payload: Mapping[str, Any] | list[Any]) -> str:

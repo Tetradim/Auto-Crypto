@@ -56,6 +56,28 @@ def test_registry_reports_credential_presence_without_values(monkeypatch):
     assert "secret-value" not in str(kraken)
 
 
+def test_registry_keeps_live_execution_locked_without_full_readiness_signoff(monkeypatch):
+    monkeypatch.setenv("AUTO_CRYPTO_KRAKEN_LIVE_ENABLED", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
+    monkeypatch.delenv("AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION", raising=False)
+
+    kraken = get_platform("kraken").to_dict(ccxt_exchange_ids={"kraken"})
+
+    assert kraken["live_execution_enabled"] is False
+
+
+def test_registry_reports_live_execution_only_after_all_readiness_gates(monkeypatch):
+    monkeypatch.setenv("AUTO_CRYPTO_KRAKEN_LIVE_ENABLED", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
+    monkeypatch.setenv("AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION", "ENABLE LIVE CRYPTO TRADING")
+
+    kraken = get_platform("kraken").to_dict(ccxt_exchange_ids={"kraken"})
+
+    assert kraken["live_execution_enabled"] is True
+
+
 def test_priority_crypto_platforms_expose_paper_safe_adapter_metadata():
     rows = {row["exchange_id"]: row for row in platform_rows({"coinbase", "kraken", "binance", "binanceus", "gemini"})}
 

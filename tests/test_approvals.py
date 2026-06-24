@@ -10,6 +10,7 @@ def test_approval_required_mode_queues_signal_until_operator_approves(tmp_path):
     repo = SQLiteRepository(tmp_path / "approvals.sqlite3")
     app = create_app(repository=repo, require_approval=True)
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/webhooks/tradingview",
@@ -43,6 +44,7 @@ def test_operator_can_reject_pending_signal(tmp_path):
     repo = SQLiteRepository(tmp_path / "reject.sqlite3")
     app = create_app(repository=repo, require_approval=True)
     client = TestClient(app)
+    client.get("/ui")
     response = client.post(
         "/webhooks/tradingview",
         json={
@@ -70,6 +72,7 @@ def test_operator_can_reject_pending_signal(tmp_path):
 def test_pending_approval_survives_restart_and_can_be_approved(tmp_path):
     db_path = tmp_path / "approval_restart.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    first_client.get("/ui")
     response = first_client.post(
         "/webhooks/tradingview",
         json={
@@ -84,6 +87,7 @@ def test_pending_approval_survives_restart_and_can_be_approved(tmp_path):
     assert response.json()["status"] == "approval_required"
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    second_client.get("/ui")
 
     assert second_client.get("/approvals").json()["pending"][0]["signal_id"] == "restart-approval"
     approved = second_client.post("/approvals/restart-approval/approve")
@@ -96,6 +100,7 @@ def test_pending_approval_survives_restart_and_can_be_approved(tmp_path):
 def test_pending_approval_preserves_risk_sizing_and_time_stop_after_restart(tmp_path):
     db_path = tmp_path / "approval_restart_risk_sized.sqlite3"
     first_client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    first_client.get("/ui")
     response = first_client.post(
         "/webhooks/tradingview",
         json={
@@ -111,6 +116,7 @@ def test_pending_approval_preserves_risk_sizing_and_time_stop_after_restart(tmp_
     )
 
     second_client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    second_client.get("/ui")
     pending = second_client.get("/approvals").json()["pending"][0]
     approved = second_client.post("/approvals/restart-risk-sized/approve")
 
@@ -132,6 +138,7 @@ def test_pending_approval_preserves_risk_sizing_and_time_stop_after_restart(tmp_
 def test_approval_attempt_during_halt_keeps_signal_pending_until_resume(tmp_path):
     db_path = tmp_path / "approval_halt.sqlite3"
     client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    client.get("/ui")
     response = client.post(
         "/webhooks/tradingview",
         json={
@@ -165,6 +172,7 @@ def test_approval_attempt_during_halt_keeps_signal_pending_until_resume(tmp_path
 def test_rejected_pending_approval_is_removed_from_repository(tmp_path):
     db_path = tmp_path / "approval_reject_restart.sqlite3"
     client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    client.get("/ui")
     response = client.post(
         "/webhooks/tradingview",
         json={
@@ -187,6 +195,7 @@ def test_rejected_pending_approval_is_removed_from_repository(tmp_path):
 def test_approval_mode_rejects_risk_invalid_signal_without_queueing(tmp_path):
     db_path = tmp_path / "approval_risk_reject.sqlite3"
     client = TestClient(create_app(repository=SQLiteRepository(db_path), require_approval=True))
+    client.get("/ui")
 
     response = client.post(
         "/signals/submit",
@@ -215,6 +224,7 @@ def test_approval_preview_rejects_risk_invalid_signal(tmp_path):
     client = TestClient(
         create_app(repository=SQLiteRepository(tmp_path / "approval_preview_reject.sqlite3"), require_approval=True)
     )
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",

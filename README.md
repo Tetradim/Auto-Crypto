@@ -663,7 +663,7 @@ Current bot work is guided by paper-first risk controls and exchange order behav
 ```env
 AUTO_CRYPTO_HOST=127.0.0.1
 AUTO_CRYPTO_PORT=8004
-AUTO_CRYPTO_REQUIRE_APPROVAL=false
+AUTO_CRYPTO_REQUIRE_APPROVAL=true
 AUTO_CRYPTO_DB_PATH=./data/auto_crypto.sqlite3
 
 AUTO_CRYPTO_WEBHOOK_SECRET=
@@ -737,6 +737,8 @@ timestamp + "." + raw_request_body
 ```
 
 Accepted signed payloads are replay-protected. Stale timestamps are rejected when `AUTO_CRYPTO_WEBHOOK_TOLERANCE_SECONDS` is set above `0`; keep it at `0` to disable timestamp staleness checks.
+
+When `AUTO_CRYPTO_WEBHOOK_SECRET` is configured, external API clients must use the same HMAC headers on state-changing operator routes, including control, bus event, approval, signal submission, market price mark, and bracket mutation endpoints. The browser operator UI does not receive the HMAC secret; loading `/ui` issues a HttpOnly `SameSite=Strict` local operator session cookie, and same-origin UI requests use that cookie instead. Preview, backtest, history, and health routes remain unsigned read-only surfaces.
 
 ## Main Endpoints
 
@@ -920,11 +922,15 @@ Operator controls:
 - `POST /control/halt`
 - `POST /control/resume`
 
+When a webhook secret is configured, `POST /control/halt` and `POST /control/resume` require either the signed-request headers described in Signed Webhooks or the local operator session cookie issued by `/ui`.
+
 Approval mode:
 
 - `GET /approvals`
 - `POST /approvals/{signal_id}/approve`
 - `POST /approvals/{signal_id}/reject`
+
+Approval approve/reject calls also require signed-request headers or the local operator session cookie when a webhook secret is configured.
 
 Exchange inspection:
 
@@ -940,6 +946,8 @@ Set `AUTO_CRYPTO_REQUIRE_APPROVAL=true` or call `create_app(require_approval=Tru
 
 When `AUTO_CRYPTO_DB_PATH` is enabled, pending approvals survive service restarts and can be approved or rejected by any later app instance using the same database.
 
+Env-backed startup rejects non-paper exchange allowlists and any `AUTO_CRYPTO_<VENUE>_LIVE_ENABLED=true` flag unless `AUTO_CRYPTO_REQUIRE_APPROVAL=true`, `AUTO_CRYPTO_WEBHOOK_SECRET` is set to at least 32 characters, and `AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION=ENABLE LIVE CRYPTO TRADING`. This keeps accidental live-risk configurations from accepting unsigned alerts or bypassing human review, and keeps the live-readiness signoff separate from per-signal approval.
+
 ## Exchange Discovery
 
 `GET /exchanges` returns paper mode plus installed CCXT exchange IDs with separate flags:
@@ -948,7 +956,7 @@ When `AUTO_CRYPTO_DB_PATH` is enabled, pending approvals survive service restart
 - `credentials_configured`
 - `live_execution_enabled`
 
-CCXT discovery does not enable live trading. It means the adapter driver can be inspected. Live order placement still needs explicit implementation, credentials, configuration gates, and exchange API keys without withdrawal permissions.
+CCXT discovery does not enable live trading. It means the adapter driver can be inspected. `live_execution_enabled` remains false unless the venue live flag, approval mode, signed-webhook secret, and live-readiness confirmation are all present. Live order placement still needs explicit implementation, credentials, configuration gates, and exchange API keys without withdrawal permissions.
 
 Signals whose `exchange` value is not in `AUTO_CRYPTO_ALLOWED_EXCHANGES` are rejected by risk checks. The default allowed exchange is `paper`.
 
@@ -991,7 +999,7 @@ Invoke-RestMethod http://127.0.0.1:8004/exchanges/bitmex/integration
 Invoke-RestMethod http://127.0.0.1:8004/exchanges/coinbase/integration
 ```
 
-Use `.[exchange]` dependencies to let CCXT-backed platforms report `adapter_ready`. Platform metadata is non-secret review data; it does not enable live execution. Keep `AUTO_CRYPTO_ALLOWED_EXCHANGES=paper` unless you are deliberately testing a non-paper path, keep every `AUTO_CRYPTO_<VENUE>_LIVE_ENABLED=false`, and use trade-only keys without withdrawal permission. A native Robinhood adapter and richer native Alpaca broker flows require separate request-signing implementations before live execution can be considered.
+Use `.[exchange]` dependencies to let CCXT-backed platforms report `adapter_ready`. Platform metadata is non-secret review data; it does not enable live execution. Keep `AUTO_CRYPTO_ALLOWED_EXCHANGES=paper` unless you are deliberately testing a non-paper path, keep every `AUTO_CRYPTO_<VENUE>_LIVE_ENABLED=false` until the live-readiness confirmation is intentionally set, and use trade-only keys without withdrawal permission. A native Robinhood adapter and richer native Alpaca broker flows require separate request-signing implementations before live execution can be considered.
 
 ## Copy-Trading Research
 
@@ -1047,8 +1055,25 @@ When SQLite is enabled:
 - Paper mode is the default and only execution path currently enabled.
 - Do not use exchange API keys with withdrawal permissions.
 - Do not allow non-paper exchange IDs until live execution controls are explicitly implemented and tested.
-- Use signed webhooks for any alert source exposed beyond localhost.
+- Use signed webhooks for any alert source exposed beyond localhost; keep browser operator actions on the `/ui` same-origin session path and never expose the HMAC secret to JavaScript.
+- Non-paper/live-risk env settings require a 32+ character webhook secret and approval mode at startup.
 - Treat alert text as commands. Keep formats strict and auditable.
+
+## Live-Money Readiness Status - 2026-06-24
+
+Current status: paper-mode crypto testing is operational; live exchange execution remains disabled by design.
+
+Latest local verification:
+- Test suite: `python -m pytest -q` -> full suite passed.
+- Runtime probe: `/api/status` returned `default_mode=paper`, `orders=0`, and `halted=false`.
+- Live venue metadata remains disabled unless venue live flag, approval mode, 32+ character signed-webhook secret, and `AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION=ENABLE LIVE CRYPTO TRADING` are all present.
+- Tight and loose long/short bracket preview coverage is in place for risk sizing, stop logic, take profit logic, trailing behavior, and paper close-side direction.
+
+Open gates before live-money use:
+- Sandbox exchange user-stream and partial-fill evidence.
+- Reconnect and reconciliation evidence for open crypto orders and positions.
+- Multi-session paper burn-in with retained reports.
+- Controlled operator access review and final operator signoff.
 
 ## Roadmap
 

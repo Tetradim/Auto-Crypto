@@ -63,6 +63,14 @@ class SQLiteRepository:
             return False
         return True
 
+    def signal_claimed(self, signal_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM signal_claims WHERE signal_id = ?",
+                (signal_id,),
+            ).fetchone()
+        return row is not None
+
     def list_signals(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT payload, created_at FROM signals ORDER BY rowid ASC").fetchall()
@@ -160,6 +168,41 @@ class SQLiteRepository:
             for row in rows
         ]
 
+    def set_runtime_state(self, key: str, value: dict[str, Any]) -> None:
+        if not key:
+            raise ValueError("runtime state key is required")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_state (key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (key, json.dumps(value, sort_keys=True)),
+            )
+
+    def get_runtime_state(self, key: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT value FROM runtime_state WHERE key = ?", (key,)).fetchone()
+        return json.loads(row["value"]) if row else None
+
+    def list_runtime_state(self, prefix: str = "") -> dict[str, dict[str, Any]]:
+        with self._connect() as conn:
+            if prefix:
+                rows = conn.execute(
+                    "SELECT key, value FROM runtime_state WHERE key LIKE ? ORDER BY key ASC",
+                    (f"{prefix}%",),
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT key, value FROM runtime_state ORDER BY key ASC").fetchall()
+        return {row["key"]: json.loads(row["value"]) for row in rows}
+
+    def delete_runtime_state(self, key: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM runtime_state WHERE key = ?", (key,))
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(
@@ -191,6 +234,12 @@ class SQLiteRepository:
                     signal_id TEXT PRIMARY KEY,
                     payload TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS runtime_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
                 INSERT OR IGNORE INTO signal_claims (signal_id)

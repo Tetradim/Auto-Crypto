@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from ..config import live_execution_enabled_from_env
+
 
 @dataclass(frozen=True)
 class CredentialField:
@@ -50,7 +52,7 @@ class TradingPlatform:
     def live_execution_enabled(self) -> bool:
         if not self.live_enabled_env:
             return False
-        return os.getenv(self.live_enabled_env, "false").strip().lower() in {"1", "true", "yes", "on"}
+        return live_execution_enabled_from_env(self.live_enabled_env)
 
     def driver_available(self, ccxt_exchange_ids: set[str] | None = None) -> bool:
         if self.driver == "native-bitunix":

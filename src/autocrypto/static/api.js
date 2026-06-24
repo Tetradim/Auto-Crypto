@@ -5,6 +5,7 @@
     const request = {
       method: options.method || "GET",
       headers: { ...(options.headers || {}) },
+      credentials: "same-origin",
     };
     if (options.body !== undefined) {
       request.headers["Content-Type"] = "application/json";

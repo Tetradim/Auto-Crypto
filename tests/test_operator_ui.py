@@ -1,11 +1,26 @@
+import hashlib
+import hmac
+import json
+
 from fastapi.testclient import TestClient
 
 from autocrypto.app import create_app
 from autocrypto.repository import SQLiteRepository
 
 
+def _signed_json(secret: str, payload: dict, timestamp: str = "2000000000") -> tuple[bytes, dict[str, str]]:
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    digest = hmac.new(secret.encode("utf-8"), timestamp.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
+    return body, {
+        "content-type": "application/json",
+        "x-auto-crypto-timestamp": timestamp,
+        "x-auto-crypto-signature": f"sha256={digest}",
+    }
+
+
 def test_operator_ui_is_served_from_backend():
     client = TestClient(create_app())
+    client.get("/ui")
 
     ui = client.get("/ui")
     formatters = client.get("/ui/static/formatters.js")
@@ -78,6 +93,7 @@ def test_operator_ui_is_served_from_backend():
     assert api.status_code == 200
     assert "window.AutoCryptoApi" in api.text
     assert "async function api" in api.text
+    assert 'credentials: "same-origin"' in api.text
     assert "Request failed" in api.text
     assert catalog.status_code == 200
     assert "window.AutoCryptoCatalog" in catalog.text
@@ -176,6 +192,7 @@ def test_operator_ui_is_served_from_backend():
 def test_ui_state_returns_dashboard_contract(tmp_path):
     repo = SQLiteRepository(tmp_path / "ui_state.sqlite3")
     client = TestClient(create_app(repository=repo))
+    client.get("/ui")
 
     response = client.get("/ui/state")
 
@@ -198,11 +215,18 @@ def test_ui_state_returns_dashboard_contract(tmp_path):
 
 def test_operator_text_submit_reuses_paper_execution_and_audit(tmp_path):
     repo = SQLiteRepository(tmp_path / "ui_submit.sqlite3")
-    client = TestClient(create_app(repository=repo, webhook_secret="configured-for-webhooks"))
+    secret = "configured-for-webhooks"
+    client = TestClient(create_app(repository=repo, webhook_secret=secret))
+    client.get("/ui")
+    body, headers = _signed_json(
+        secret,
+        {"message": "BUY BTCUSDT $75 @ 50000 SL 2% TP 5% TRAIL 3% BE 2%"},
+    )
 
     response = client.post(
         "/signals/submit-text",
-        json={"message": "BUY BTCUSDT $75 @ 50000 SL 2% TP 5% TRAIL 3% BE 2%"},
+        content=body,
+        headers=headers,
     )
 
     assert response.status_code == 200
@@ -226,6 +250,7 @@ def test_operator_text_submit_reuses_paper_execution_and_audit(tmp_path):
 def test_operator_state_marks_short_bracket_direction(tmp_path):
     repo = SQLiteRepository(tmp_path / "ui_short.sqlite3")
     client = TestClient(create_app(repository=repo))
+    client.get("/ui")
 
     response = client.post(
         "/signals/submit",
@@ -251,6 +276,7 @@ def test_operator_state_marks_short_bracket_direction(tmp_path):
 def test_operator_text_submit_can_queue_for_approval(tmp_path):
     repo = SQLiteRepository(tmp_path / "ui_approval.sqlite3")
     client = TestClient(create_app(repository=repo, require_approval=True))
+    client.get("/ui")
 
     response = client.post(
         "/signals/submit-text",
@@ -267,6 +293,7 @@ def test_operator_text_submit_can_queue_for_approval(tmp_path):
 def test_operator_text_preview_reports_risk_without_ordering(tmp_path):
     repo = SQLiteRepository(tmp_path / "ui_preview.sqlite3")
     client = TestClient(create_app(repository=repo))
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview-text",
@@ -290,6 +317,7 @@ def test_operator_text_preview_reports_risk_without_ordering(tmp_path):
 def test_operator_structured_preview_reflects_approval_mode(tmp_path):
     repo = SQLiteRepository(tmp_path / "ui_json_preview.sqlite3")
     client = TestClient(create_app(repository=repo, require_approval=True))
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",
@@ -319,6 +347,7 @@ def test_operator_structured_preview_reflects_approval_mode(tmp_path):
 def test_operator_json_submit_preserves_strategy_metadata(tmp_path):
     repo = SQLiteRepository(tmp_path / "ui_json_submit.sqlite3")
     client = TestClient(create_app(repository=repo))
+    client.get("/ui")
 
     response = client.post(
         "/signals/submit",
@@ -349,6 +378,7 @@ def test_operator_json_submit_preserves_strategy_metadata(tmp_path):
 def test_operator_json_submit_supports_base_amount_sells(tmp_path):
     repo = SQLiteRepository(tmp_path / "ui_json_base_submit.sqlite3")
     client = TestClient(create_app(repository=repo))
+    client.get("/ui")
 
     buy = client.post(
         "/signals/submit",

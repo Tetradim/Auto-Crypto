@@ -857,8 +857,16 @@ class PaperExchange:
         quantity: Decimal,
         exit_orders: list[ExitOrder],
     ) -> tuple[Decimal, Decimal | None]:
-        if quantity <= 0 or signal.reduce_only or not exit_orders:
-            return Decimal("0"), quantity if quantity > 0 and exit_orders else None
+        if quantity <= 0:
+            return Decimal("0"), None
+        if signal.reduce_only:
+            if signal.side == "buy":
+                return min(quantity, self._open_lot_quantity(signal.symbol, "short")), Decimal("0")
+            if signal.side == "sell":
+                return min(quantity, self._open_lot_quantity(signal.symbol, "long")), Decimal("0")
+            return Decimal("0"), Decimal("0")
+        if not exit_orders:
+            return Decimal("0"), None
         if signal.side == "buy":
             opposite_quantity = self._open_lot_quantity(signal.symbol, "short")
         elif signal.side == "sell":

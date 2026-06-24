@@ -8,6 +8,7 @@ def test_halt_blocks_new_orders_until_resumed_and_records_audit(tmp_path):
     repo = SQLiteRepository(tmp_path / "control.sqlite3")
     app = create_app(repository=repo)
     client = TestClient(app)
+    client.get("/ui")
 
     halted = client.post("/control/halt", json={"reason": "exchange maintenance"})
     assert halted.status_code == 200

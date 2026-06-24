@@ -1,6 +1,8 @@
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from autocrypto.config import load_settings
 
 
@@ -24,15 +26,16 @@ def test_load_settings_maps_environment_to_risk_webhook_and_repository_config(mo
     monkeypatch.setenv("AUTO_CRYPTO_MIN_TOTAL_REWARD_RISK_RATIO", "1.5")
     monkeypatch.setenv("AUTO_CRYPTO_MAX_TAKE_PROFIT_TARGETS", "3")
     monkeypatch.setenv("AUTO_CRYPTO_ALLOWED_EXCHANGES", "paper,binance, kraken")
-    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
     monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_TOLERANCE_SECONDS", "120")
     monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION", "ENABLE LIVE CRYPTO TRADING")
     monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_FIXED_STOP_FOR_PENDING_TRAILING", "false")
 
     settings = load_settings()
 
     assert settings.db_path == db_path
-    assert settings.webhook_secret == "secret"
+    assert settings.webhook_secret == "x" * 32
     assert settings.webhook_tolerance_seconds == 120
     assert settings.require_approval is True
     assert settings.risk.max_order_notional == Decimal("250")
@@ -80,3 +83,58 @@ def test_docker_entrypoint_uses_env_backed_app_factory():
 
     assert "autocrypto.app:create_app_from_env" in text
     assert "--factory" in text
+
+
+def test_non_paper_exchange_config_requires_approval_and_signed_webhooks(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AUTO_CRYPTO_ALLOWED_EXCHANGES", "paper,bitunix")
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "false")
+
+    with pytest.raises(ValueError, match="AUTO_CRYPTO_REQUIRE_APPROVAL=true"):
+        load_settings()
+
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "true")
+    monkeypatch.delenv("AUTO_CRYPTO_WEBHOOK_SECRET", raising=False)
+
+    with pytest.raises(ValueError, match="AUTO_CRYPTO_WEBHOOK_SECRET"):
+        load_settings()
+
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
+    monkeypatch.delenv("AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION", raising=False)
+
+    with pytest.raises(ValueError, match="AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION"):
+        load_settings()
+
+
+def test_non_paper_exchange_config_rejects_weak_webhook_secret(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AUTO_CRYPTO_ALLOWED_EXCHANGES", "paper,bitunix")
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "secret")
+
+    with pytest.raises(ValueError, match="at least 32 characters"):
+        load_settings()
+
+
+def test_live_enabled_flag_requires_approval_and_signed_webhooks(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AUTO_CRYPTO_ALLOWED_EXCHANGES", "paper")
+    monkeypatch.setenv("AUTO_CRYPTO_BITUNIX_LIVE_ENABLED", "true")
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "false")
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
+
+    with pytest.raises(ValueError, match="AUTO_CRYPTO_REQUIRE_APPROVAL=true"):
+        load_settings()
+
+    monkeypatch.setenv("AUTO_CRYPTO_REQUIRE_APPROVAL", "true")
+    monkeypatch.delenv("AUTO_CRYPTO_WEBHOOK_SECRET", raising=False)
+
+    with pytest.raises(ValueError, match="AUTO_CRYPTO_WEBHOOK_SECRET"):
+        load_settings()
+
+    monkeypatch.setenv("AUTO_CRYPTO_WEBHOOK_SECRET", "x" * 32)
+    monkeypatch.delenv("AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION", raising=False)
+
+    with pytest.raises(ValueError, match="AUTO_CRYPTO_LIVE_TRADING_CONFIRMATION"):
+        load_settings()

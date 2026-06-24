@@ -31,6 +31,7 @@ def test_edge_stop_buying_action_halts_new_auto_crypto_orders(tmp_path):
     try:
         repo = SQLiteRepository(tmp_path / "edge_action.sqlite3")
         client = TestClient(create_app(repository=repo))
+        client.get("/ui")
 
         response = client.post(
             "/bus/edge-actions",
@@ -75,6 +76,7 @@ def test_edge_stop_buying_action_halts_new_auto_crypto_orders(tmp_path):
 def test_unmapped_edge_action_is_recorded_without_halting(tmp_path):
     repo = SQLiteRepository(tmp_path / "ignored_edge_action.sqlite3")
     client = TestClient(create_app(repository=repo))
+    client.get("/ui")
 
     response = client.post(
         "/bus/edge-actions",

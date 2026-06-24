@@ -7,6 +7,7 @@ from autocrypto.bracket_templates import apply_bracket_template, list_bracket_te
 def test_bracket_template_catalog_exposes_paper_only_presets():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.get("/bracket-templates")
 
@@ -45,6 +46,7 @@ def test_apply_bracket_template_keeps_explicit_signal_fields_and_overrides_last(
 def test_preview_template_signal_returns_normalized_bracket_plan_without_order():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview-template",
@@ -75,6 +77,7 @@ def test_preview_template_signal_returns_normalized_bracket_plan_without_order()
 def test_submit_template_signal_uses_existing_paper_intake_path():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/submit-template",
@@ -110,6 +113,7 @@ def test_unknown_bracket_template_is_rejected():
 
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview-template",

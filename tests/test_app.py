@@ -7,6 +7,7 @@ from autocrypto.risk import RiskConfig
 def test_webhook_test_mode_returns_paper_order_without_live_execution():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/webhooks/tradingview",
@@ -30,6 +31,7 @@ def test_webhook_test_mode_returns_paper_order_without_live_execution():
 def test_market_price_response_includes_updated_active_exits():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -63,6 +65,7 @@ def test_market_price_response_includes_updated_active_exits():
 def test_market_price_preview_reports_next_trailing_ratchet_without_mutating_state():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -98,6 +101,7 @@ def test_market_price_preview_reports_next_trailing_ratchet_without_mutating_sta
 def test_bracket_decision_support_sequences_exits_and_trailing_context():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -131,6 +135,7 @@ def test_bracket_decision_support_sequences_exits_and_trailing_context():
 def test_signal_preview_includes_synthetic_bracket_plan_for_short_trailing_order():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",
@@ -166,6 +171,7 @@ def test_signal_preview_includes_synthetic_bracket_plan_for_short_trailing_order
 def test_signal_preview_includes_fixed_amount_trailing_activation_price():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",
@@ -194,6 +200,7 @@ def test_signal_preview_includes_fixed_amount_trailing_activation_price():
 def test_signal_preview_includes_trailing_step_controls():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",
@@ -218,6 +225,7 @@ def test_signal_preview_includes_trailing_step_controls():
 def test_signal_preview_marks_trailing_stop_waiting_for_take_profit():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",
@@ -246,6 +254,7 @@ def test_signal_preview_marks_trailing_stop_waiting_for_take_profit():
 def test_signal_preview_includes_time_stop_mark_plan():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",
@@ -272,6 +281,7 @@ def test_signal_preview_includes_time_stop_mark_plan():
 def test_market_price_response_reports_time_stop_marks_remaining():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -300,6 +310,7 @@ def test_market_price_response_reports_time_stop_marks_remaining():
 def test_signal_preview_reports_risk_sized_bracket_metrics():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",
@@ -328,6 +339,7 @@ def test_signal_preview_reports_risk_sized_bracket_metrics():
 def test_signal_preview_reports_weighted_total_reward_for_staged_targets():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/signals/preview",
@@ -356,6 +368,7 @@ def test_signal_preview_reports_weighted_total_reward_for_staged_targets():
 def test_backtest_signal_replays_price_path_without_mutating_live_engine():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/signal",
@@ -386,6 +399,7 @@ def test_backtest_signal_replays_price_path_without_mutating_live_engine():
 def test_backtest_signal_can_trigger_time_stop_without_mutating_live_engine():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/signal",
@@ -418,6 +432,7 @@ def test_backtest_signal_can_trigger_time_stop_without_mutating_live_engine():
 def test_backtest_signal_can_include_fee_costs_in_paper_pnl():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/signal",
@@ -463,6 +478,7 @@ def test_backtest_signal_can_include_fee_costs_in_paper_pnl():
 def test_backtest_signal_can_include_funding_costs_for_open_perp_exposure():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/signal",
@@ -501,6 +517,7 @@ def test_backtest_signal_can_include_funding_costs_for_open_perp_exposure():
 def test_backtest_candles_use_conservative_adverse_first_path_and_report_excursion():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/signal",
@@ -539,6 +556,7 @@ def test_backtest_candles_use_conservative_adverse_first_path_and_report_excursi
 def test_backtest_reports_final_mark_to_market_for_open_position():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/signal",
@@ -584,6 +602,7 @@ def test_backtest_reports_final_mark_to_market_for_open_position():
 def test_backtest_can_force_close_open_position_at_final_mark():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/signal",
@@ -658,6 +677,7 @@ def test_bitunix_kline_backtest_uses_native_candles_without_mutating_live_engine
     monkeypatch.setattr("autocrypto.app.BitunixRestClient", FakeBitunixClient)
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/bitunix-klines",
@@ -695,6 +715,7 @@ def test_bitunix_kline_backtest_uses_native_candles_without_mutating_live_engine
 def test_backtest_stress_runs_named_price_and_cost_scenarios():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/stress",
@@ -728,6 +749,7 @@ def test_backtest_stress_runs_named_price_and_cost_scenarios():
 def test_backtest_batch_ranks_ticker_candidates_without_mutating_live_engine():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/batch",
@@ -768,6 +790,7 @@ def test_backtest_batch_ranks_ticker_candidates_without_mutating_live_engine():
 def test_backtest_batch_can_continue_after_invalid_candidate():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     response = client.post(
         "/backtest/batch",
@@ -800,6 +823,7 @@ def test_backtest_batch_can_continue_after_invalid_candidate():
 def test_symbol_concentration_cap_uses_current_paper_position():
     app = create_app(risk_config=RiskConfig(max_order_notional=1000, max_symbol_open_notional=150))
     client = TestClient(app)
+    client.get("/ui")
 
     first = client.post(
         "/webhooks/tradingview",
@@ -832,6 +856,7 @@ def test_symbol_concentration_cap_uses_current_paper_position():
 def test_bracket_summary_reports_protective_distance_and_locked_pnl_after_tighten():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -860,6 +885,7 @@ def test_bracket_summary_reports_protective_distance_and_locked_pnl_after_tighte
 def test_bracket_summary_reports_total_target_reward_for_staged_targets():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -890,6 +916,7 @@ def test_bracket_summary_reports_total_target_reward_for_staged_targets():
 def test_bracket_risk_summary_aggregates_long_short_and_trailing_counts():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -946,6 +973,7 @@ def test_bracket_risk_summary_aggregates_long_short_and_trailing_counts():
 def test_bracket_oca_groups_report_reused_external_group_and_health_flag():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     for signal_id, symbol in (("shared-oca-one", "BTCUSDT"), ("shared-oca-two", "ETHUSDT")):
         client.post(
@@ -987,6 +1015,7 @@ def test_bracket_oca_groups_report_reused_external_group_and_health_flag():
 def test_bracket_health_flags_pending_trailing_and_missing_take_profit():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1019,6 +1048,7 @@ def test_bracket_health_flags_pending_trailing_and_missing_take_profit():
 def test_bracket_coverage_reports_partial_exit_residuals():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1061,6 +1091,7 @@ def test_bracket_coverage_reports_partial_exit_residuals():
 def test_bracket_health_flags_reward_below_open_risk():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1088,6 +1119,7 @@ def test_bracket_health_flags_reward_below_open_risk():
 def test_bracket_preview_reports_close_impact_without_mutating_state():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1120,6 +1152,7 @@ def test_bracket_preview_reports_close_impact_without_mutating_state():
 def test_bracket_preview_reports_trailing_ratchet_impact_without_trigger():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1158,6 +1191,7 @@ def test_bracket_preview_reports_trailing_ratchet_impact_without_trigger():
 def test_bracket_preview_invariant_does_not_mutate_state_snapshots():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1197,6 +1231,7 @@ def test_bracket_preview_invariant_does_not_mutate_state_snapshots():
 def test_lock_profit_moves_protective_exits_beyond_entry_without_live_execution():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1233,6 +1268,7 @@ def test_lock_profit_moves_protective_exits_beyond_entry_without_live_execution(
 def test_bracket_exit_ladder_reports_staged_and_partial_trailing_quantities():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1276,6 +1312,7 @@ def test_bracket_exit_ladder_reports_staged_and_partial_trailing_quantities():
 def test_short_bracket_exit_ladder_uses_buyback_pnl_direction():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1309,6 +1346,7 @@ def test_short_bracket_exit_ladder_uses_buyback_pnl_direction():
 def test_bracket_preview_path_replays_trailing_marks_without_mutating_active_bracket():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1350,6 +1388,7 @@ def test_bracket_preview_path_replays_trailing_marks_without_mutating_active_bra
 def test_bracket_preview_path_rejects_empty_mark_list():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1373,6 +1412,7 @@ def test_bracket_preview_path_rejects_empty_mark_list():
 def test_bracket_preview_candle_uses_conservative_long_intrabar_order_without_mutating_state():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1426,6 +1466,7 @@ def test_bracket_preview_candle_uses_conservative_long_intrabar_order_without_mu
 def test_bracket_preview_candle_can_compare_favorable_first_path_with_open_mark():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1471,6 +1512,7 @@ def test_bracket_preview_candle_can_compare_favorable_first_path_with_open_mark(
 def test_bracket_preview_candle_compares_intrabar_policy_outcomes_without_mutating_state():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1508,6 +1550,7 @@ def test_bracket_preview_candle_compares_intrabar_policy_outcomes_without_mutati
 def test_bracket_preview_candle_rejects_open_outside_range_and_unknown_policy():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
@@ -1540,6 +1583,7 @@ def test_bracket_preview_candle_rejects_open_outside_range_and_unknown_policy():
 def test_bracket_preview_candle_uses_conservative_short_intrabar_order_without_mutating_state():
     app = create_app()
     client = TestClient(app)
+    client.get("/ui")
 
     client.post(
         "/webhooks/tradingview",
